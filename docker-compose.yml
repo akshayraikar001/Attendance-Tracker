@@ -1,0 +1,18 @@
+services:
+  mysql:
+    image: mysql:8.4
+    environment:
+      MYSQL_DATABASE: attendance_tracker
+      MYSQL_USER: attendance
+      MYSQL_PASSWORD: attendance_dev
+      MYSQL_ROOT_PASSWORD: local_root_dev
+    ports:
+      - "3306:3306"
+    volumes:
+      - attendance_data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
+      interval: 5s
+      retries: 20
+volumes:
+  attendance_data:
