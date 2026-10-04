@@ -18,43 +18,67 @@ export async function authApi(path, body, method = "POST") {
   return data;
 }
 export default function AuthGate({ children }) {
-  const [user, setUser] = useState(null),
-    [loading, setLoading] = useState(true),
-    [setup, setSetup] = useState(false),
-    [error, setError] = useState(""),
-    [busy, setBusy] = useState(false);
+  const [user, setUser] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [mode, setMode] = useState("login");
+  const [error, setError] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [legacy, setLegacy] = useState(false);
   useEffect(() => {
     document.documentElement.dataset.theme =
       localStorage.getItem("dayline-theme") || "dark";
+    const expired = () => {
+      setUser(null);
+      setMode("login");
+    };
+    window.addEventListener("session-expired", expired);
+    let cancelled = false;
     async function load() {
       try {
-        const status = await authApi("/auth/status");
-        setSetup(status.setupRequired);
-        if (!status.setupRequired) {
-          const response = await fetch("/api/auth/me");
-          if (response.ok) setUser(await response.json());
-          else if (response.status !== 401)
-            throw new Error("Unable to check your login. Refresh to retry.");
+        const response = await fetch("/api/auth/me", {
+          credentials: "same-origin",
+        });
+        if (response.ok) {
+          const data = await response.json();
+          if (!cancelled) setUser(data);
+        } else if (response.status !== 401) {
+          throw new Error(
+            "We can't connect to your workspace right now. Please try again shortly.",
+          );
         }
       } catch (e) {
-        setError(e.message);
+        if (!cancelled) setError(e.message);
       } finally {
-        setLoading(false);
+        if (!cancelled) setLoading(false);
       }
     }
     load();
-    const expired = () => setUser(null);
-    window.addEventListener("session-expired", expired);
-    return () => window.removeEventListener("session-expired", expired);
+    return () => {
+      cancelled = true;
+      window.removeEventListener("session-expired", expired);
+    };
   }, []);
+  function switchMode(next) {
+    setMode(next);
+    setError("");
+    setLegacy(false);
+  }
   async function submit(e) {
     e.preventDefault();
     setBusy(true);
     setError("");
     try {
       const data = Object.fromEntries(new FormData(e.currentTarget));
-      setUser(await authApi(setup ? "/auth/setup" : "/auth/login", data));
-      setSetup(false);
+      if (mode === "register" && data.password !== data.confirmPassword) {
+        setError("Passwords do not match.");
+        return;
+      }
+      setUser(
+        await authApi(
+          mode === "register" ? "/auth/register" : "/auth/login",
+          data,
+        ),
+      );
     } catch (e) {
       setError(e.message);
     } finally {
@@ -62,8 +86,13 @@ export default function AuthGate({ children }) {
     }
   }
   async function logout() {
-    await authApi("/auth/logout", {});
-    setUser(null);
+    try {
+      await authApi("/auth/logout", {});
+      setUser(null);
+      switchMode("login");
+    } catch (e) {
+      setError(e.message);
+    }
   }
   if (loading)
     return (
@@ -72,64 +101,104 @@ export default function AuthGate({ children }) {
       </main>
     );
   if (user) return children({ user, onLogout: logout });
+  const registering = mode === "register";
   return (
     <main className="login-page">
       <form className="card login-card" onSubmit={submit}>
         <div className="login-brand">dayline.</div>
-        <h1>{setup ? "Create your administrator account" : "Welcome back"}</h1>
+        <h1>{registering ? "Create your account" : "Welcome back"}</h1>
         <p>
-          {setup
-            ? "Set up the first account to secure your attendance workspace."
+          {registering
+            ? "Enter your details to get started."
             : "Sign in to your attendance workspace."}
         </p>
-        {setup && (
+        {(mode === "login" || registering) && (
           <>
+            {registering && (
+              <label>
+                Your name
+                <input
+                  name="name"
+                  required
+                  minLength={2}
+                  maxLength={100}
+                  autoComplete="name"
+                />
+              </label>
+            )}
             <label>
-              Your name
-              <input name="name" required maxLength={100} autoComplete="name" />
+              {legacy ? "Username" : "Email address"}
+              <input
+                key={legacy ? "username" : "email"}
+                name={legacy ? "username" : "email"}
+                type={legacy ? "text" : "email"}
+                required
+                maxLength={254}
+                autoComplete="username"
+                autoCapitalize="none"
+              />
             </label>
             <label>
-              One-time setup code
-              <input name="setupToken" required autoComplete="off" />
+              Password
+              <input
+                key={mode}
+                name="password"
+                type="password"
+                required
+                minLength={registering ? 10 : 1}
+                maxLength={128}
+                autoComplete={registering ? "new-password" : "current-password"}
+              />
             </label>
-            <p className="setup-hint">
-              On the server, run <code>cat .local/admin-setup-token</code> to
-              get this code.
-            </p>
+            {registering && (
+              <>
+                <label>
+                  Confirm password
+                  <input
+                    name="confirmPassword"
+                    type="password"
+                    required
+                    minLength={10}
+                    maxLength={128}
+                    autoComplete="new-password"
+                  />
+                </label>
+                <p>Use at least 10 characters for your password.</p>
+              </>
+            )}
           </>
         )}
-        <label>
-          Username
-          <input
-            name="username"
-            required
-            minLength={3}
-            maxLength={60}
-            pattern="[A-Za-z0-9._-]+"
-            autoComplete="username"
-            autoCapitalize="none"
-          />
-        </label>
-        <label>
-          Password
-          <input
-            name="password"
-            type="password"
-            required
-            minLength={10}
-            maxLength={128}
-            autoComplete={setup ? "new-password" : "current-password"}
-          />
-        </label>
-        {setup && <p>Use at least 10 characters for your password.</p>}
         {error && (
           <p role="alert" className="error-text">
             {error}
           </p>
         )}
         <button className="primary" disabled={busy}>
-          {busy ? "Please wait…" : setup ? "Create administrator" : "Sign in"}
+          {busy ? "Please wait…" : registering ? "Create account" : "Sign in"}
         </button>
+        <button
+          type="button"
+          className="button"
+          disabled={busy}
+          onClick={() => switchMode(mode === "login" ? "register" : "login")}
+        >
+          {mode === "login"
+            ? "New to Dayline? Create account"
+            : "Back to sign in"}
+        </button>
+        {mode === "login" && (
+          <button
+            type="button"
+            className="button"
+            disabled={busy}
+            onClick={() => {
+              setLegacy(!legacy);
+              setError("");
+            }}
+          >
+            {legacy ? "Use email instead" : "Have an older username account?"}
+          </button>
+        )}
       </form>
     </main>
   );

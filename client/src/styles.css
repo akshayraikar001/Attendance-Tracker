@@ -3416,3 +3416,49 @@ textarea {
     white-space: normal;
   }
 }
+
+.clock-input {
+  position: relative;
+  display: block;
+  min-width: 0;
+}
+.clock-input > input {
+  width: 100%;
+  padding-right: 44px;
+}
+.clock-input-trigger {
+  position: absolute;
+  right: 4px;
+  top: 50%;
+  transform: translateY(-50%);
+  display: grid;
+  place-items: center;
+  width: 36px;
+  height: 36px;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+}
+.clock-input-trigger:hover { background: #8db49625; }
+.clock-input-trigger:focus-visible { outline: 2px solid #8db496; }
+.clock-input-trigger:disabled { opacity: .45; cursor: default; }
+.clock-input-picker {
+  position: absolute;
+  z-index: 20;
+  top: calc(100% + 6px);
+  left: 0;
+  width: 100%;
+  min-width: 230px;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: #fff;
+  color: #252d2b;
+  box-shadow: 0 8px 24px #0002;
+}
+.clock-input-selectors { display: flex; align-items: center; gap: 6px; }
+.clock-input-selectors select { flex: 1; min-width: 0; width: auto; margin: 0; padding: 8px 4px; }
+.clock-input-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 12px; }
+[data-theme="dark"] .clock-input-picker { background: #1b241f; color: #e0e9e2; border-color: #344338; }

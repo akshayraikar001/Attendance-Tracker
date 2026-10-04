@@ -15,7 +15,6 @@ const port = listener.address().port;
 await new Promise((resolve) => listener.close(resolve));
 const env = {
   ...process.env,
-  AUTH_SETUP_TOKEN: "isolated-test-setup-token-123456789",
   DB_HOST: "127.0.0.1",
   DB_PORT: "3307",
   DB_NAME: database,
@@ -27,7 +26,7 @@ let child;
 try {
   await admin.query(`CREATE DATABASE \`${database}\``);
   await admin.query(
-    `GRANT SELECT, INSERT, UPDATE, CREATE, ALTER, REFERENCES ON \`${database}\`.* TO 'attendance'@'%'`,
+    `GRANT SELECT, INSERT, UPDATE, DELETE, CREATE, ALTER, REFERENCES ON \`${database}\`.* TO 'attendance'@'%'`,
   );
   const setup = spawnSync(process.execPath, ["server/src/setup.js"], {
     env,
@@ -45,20 +44,24 @@ try {
     } catch {}
     await new Promise((resolve) => setTimeout(resolve, 100));
   }
-  const auth = await fetch(base + "/auth/setup", {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "X-Requested-With": "Dayline",
-    },
-    body: JSON.stringify({
-      name: "Test Admin",
-      username: "admin",
-      password: "test-password-12345",
-      setupToken: env.AUTH_SETUP_TOKEN,
-    }),
-  });
-  assert.equal(auth.status, 201, await auth.text());
+  const credentials = {
+    name: "Test Admin",
+    email: "owner@example.test",
+    password: "test-password-12345",
+    confirmPassword: "test-password-12345",
+  };
+  const post = (path, body) =>
+    fetch(base + path, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "X-Requested-With": "Dayline",
+      },
+      body: JSON.stringify(body),
+    });
+  assert.equal((await post("/auth/register", credentials)).status, 201);
+  const auth = await post("/auth/login", credentials);
+  assert.equal(auth.status, 200);
   const cookie = auth.headers.get("set-cookie").split(";")[0];
   async function api(path, body, method = "PUT", status = 200) {
     const response = await fetch(

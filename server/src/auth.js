@@ -6,6 +6,7 @@ import {
 } from "node:crypto";
 import { promisify } from "node:util";
 import { z } from "zod";
+const emailSchema = z.string().trim().toLowerCase().email().max(254);
 const scrypt = promisify(scryptCallback);
 const digest = (value) => createHash("sha256").update(value).digest("hex");
 const credentials = z.object({
@@ -24,6 +25,7 @@ const profile = z.object({
 const publicUser = (u) => ({
   id: u.id,
   username: u.username,
+  email: u.email || null,
   name: u.name,
   role: u.role,
   active: Boolean(u.active),
@@ -44,7 +46,7 @@ export function registerAuth({ app, wrap, query, transaction, audit }) {
   function limit(req) {
     const now = Date.now();
     for (const [k, v] of attempts) if (v.until < now) attempts.delete(k);
-    const key = req.socket.remoteAddress;
+    const key = req.socket.remoteAddress + ":" + req.path;
     const item = attempts.get(key) || { count: 0, until: now + 15 * 60 * 1000 };
     if (++item.count > 20)
       throw fail("Too many attempts. Try again in 15 minutes.", 429);
@@ -93,43 +95,53 @@ export function registerAuth({ app, wrap, query, transaction, audit }) {
     }),
   );
   app.post(
-    "/api/auth/setup",
+    "/api/auth/register",
     wrap(async (req, res) => {
       limit(req);
-      const data = credentials
-        .extend({
-          name: z.string().trim().min(2).max(100),
-          setupToken: z.string().min(20).max(200),
+      const data = z
+        .object({
+          name: profile.shape.name,
+          email: emailSchema,
+          password: credentials.shape.password,
+          confirmPassword: z.string().max(128),
+        })
+        .refine((d) => d.password === d.confirmPassword, {
+          message: "Passwords do not match.",
+          path: ["confirmPassword"],
         })
         .parse(req.body);
       const hash = await passwordHash(data.password);
       const user = await transaction(async (c) => {
+        // Serialize first-account creation so concurrent signups cannot both be administrators.
         await c.execute("SELECT id FROM settings WHERE id=1 FOR UPDATE");
+        const [existing] = await c.execute(
+          "SELECT id FROM users WHERE email=?",
+          [data.email],
+        );
+        if (existing.length)
+          throw fail(
+            "An account with this email already exists. Please sign in.",
+            409,
+          );
         const [users] = await c.execute("SELECT id FROM users LIMIT 1");
-        if (users.length)
-          throw fail("Administrator setup is already complete.", 409);
-        const [tokens] = await c.execute(
-          "SELECT tokenHash FROM auth_setup WHERE id=1",
-        );
-        if (
-          !tokens[0] ||
-          !timingSafeEqual(
-            Buffer.from(tokens[0].tokenHash),
-            Buffer.from(digest(data.setupToken)),
-          )
-        )
-          throw fail("Invalid setup code.", 403);
+        const role = users.length ? "Staff" : "Admin";
+        const username = "email_" + randomBytes(16).toString("hex");
         const [r] = await c.execute(
-          "INSERT INTO users (username,name,passwordHash,role,active) VALUES (?,?,?,?,1)",
-          [data.username, data.name, hash, "Admin"],
+          "INSERT INTO users (username,email,name,passwordHash,role,active) VALUES (?,?,?,?,?,1)",
+          [username, data.email, data.name, hash, role],
         );
-        await c.execute("UPDATE auth_setup SET tokenHash=? WHERE id=1", [
-          digest(randomBytes(32)),
-        ]);
-        await audit(c, "Administrator created", "user", r.insertId, {
-          username: data.username,
+        await audit(c, "Account created", "user", r.insertId, {
+          email: data.email,
+          role,
         });
-        return { id: r.insertId, ...data, role: "Admin", active: true };
+        return {
+          id: r.insertId,
+          username,
+          email: data.email,
+          name: data.name,
+          role,
+          active: true,
+        };
       });
       res.status(201).json(await loginSession(req, res, user));
     }),
@@ -138,15 +150,30 @@ export function registerAuth({ app, wrap, query, transaction, audit }) {
     "/api/auth/login",
     wrap(async (req, res) => {
       limit(req);
-      const data = credentials.parse(req.body);
-      const [u] = await query("SELECT * FROM users WHERE username=?", [
-        data.username,
-      ]);
+      const data = z
+        .object({
+          email: emailSchema.optional(),
+          username: credentials.shape.username.optional(),
+          password: z.string().min(1).max(128),
+        })
+        .refine((d) => d.email || d.username, "Enter your email address.")
+        .parse(req.body);
+      const [u] = await query(
+        data.email
+          ? "SELECT * FROM users WHERE email=?"
+          : "SELECT * FROM users WHERE username=? AND email IS NULL",
+        [data.email || data.username],
+      );
       const hash =
         u?.passwordHash ||
         "00000000000000000000000000000000:" + "00".repeat(64);
-      if (!(await verify(data.password, hash)) || !u?.active)
-        throw fail("Invalid username or password.", 401);
+      if (!(await verify(data.password, hash)) || !u)
+        throw fail("Incorrect email or password.", 401);
+      if (!u.active)
+        throw fail(
+          "Your administrator needs to enable your account before you can sign in.",
+          403,
+        );
       res.json(await loginSession(req, res, u));
     }),
   );
@@ -219,7 +246,7 @@ export function registerAuth({ app, wrap, query, transaction, audit }) {
       res.json(
         (
           await query(
-            "SELECT id,username,name,role,active FROM users ORDER BY name",
+            "SELECT id,username,email,name,role,active FROM users ORDER BY name",
           )
         ).map(publicUser),
       ),

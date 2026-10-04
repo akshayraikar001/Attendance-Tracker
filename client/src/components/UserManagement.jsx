@@ -89,7 +89,7 @@ export default function UserManagement({ api, user, onLogout }) {
               Username
               <input
                 name="username"
-                defaultValue={edit.username}
+                defaultValue={edit.email || edit.username}
                 required
                 disabled={!!edit.id}
                 minLength={3}
@@ -144,7 +144,7 @@ export default function UserManagement({ api, user, onLogout }) {
           <thead>
             <tr>
               <th>Name</th>
-              <th>Username</th>
+              <th>Email / username</th>
               <th>Access</th>
               <th>Status</th>
               <th>Action</th>
@@ -157,7 +157,7 @@ export default function UserManagement({ api, user, onLogout }) {
                   {u.name}
                   {u.id === user.id ? " (you)" : ""}
                 </td>
-                <td>{u.username}</td>
+                <td>{u.email || u.username}</td>
                 <td>{u.role}</td>
                 <td>{u.active ? "Active" : "Disabled"}</td>
                 <td>

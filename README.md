@@ -89,7 +89,15 @@ npm start
 
 The Node server serves the compiled React app and API at http://localhost:3001.
 
-This release is a single-administrator workspace without built-in login. Run on a trusted local network or place it behind authenticated access before exposing employee data on the internet. Database credentials belong in `.env`, which is gitignored.
+Dayline uses database-backed accounts with email and password sign-in. Database credentials belong in `.env`, which is gitignored.
+
+## Internal signup and login
+
+Select **Create account**, enter your name, email, password (at least 10 characters), and confirm password. Creating an account signs you in immediately. Use your email and password for future sign-ins. No email service, verification link, setup code, or external account is required. Passwords are stored as salted scrypt hashes.
+
+The first registered account becomes the administrator; later registrations become active Staff accounts. Staff can work with attendance, employees, and reports; administrators manage accounts and workspace settings. This signup policy is intended for the trusted internal workspace. Existing username accounts still work using **Have an older username account?**.
+
+Run `npm run db:setup` once after upgrading and restart the API. Existing users, employees, attendance, and settings are preserved. Old email-verification tables, if present, are unused. No SMTP or owner-email configuration is read. Set `COOKIE_SECURE=true` when serving over HTTPS; leave it false for local HTTP development.
 
 ## Verification
 
@@ -99,6 +107,8 @@ npm run test:ui
 npm run test:export
 npm run test:admin
 npm run test:holidays
+npm run test:auth
+npm run test:auth:ui
 npm run build
 ```
 

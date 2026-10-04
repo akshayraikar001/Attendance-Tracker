@@ -54,28 +54,12 @@ await query(
 await query(
   `CREATE TABLE IF NOT EXISTS sessions (id CHAR(64) PRIMARY KEY,userId INT NOT NULL,expiresAt DATETIME NOT NULL,FOREIGN KEY(userId) REFERENCES users(id), INDEX (expiresAt))`,
 );
-await query(
-  `CREATE TABLE IF NOT EXISTS auth_setup (id INT PRIMARY KEY,tokenHash CHAR(64) NOT NULL)`,
+// Nullable email preserves existing username accounts during migration.
+const [userEmail] = await query(
+  "SELECT COLUMN_NAME FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='users' AND COLUMN_NAME='email'",
 );
-const [setupExists] = await query("SELECT COUNT(*) AS total FROM auth_setup");
-if (!setupExists.total) {
-  const { randomBytes, createHash } = await import("node:crypto");
-  const token = process.env.AUTH_SETUP_TOKEN || randomBytes(24).toString("hex");
-  if (!process.env.AUTH_SETUP_TOKEN) {
-    const { mkdir, writeFile } = await import("node:fs/promises");
-    const folder = new URL("../../.local/", import.meta.url);
-    await mkdir(folder, { recursive: true });
-    await writeFile(new URL("admin-setup-token", folder), token + "\n", {
-      mode: 0o600,
-    });
-    console.log(
-      "First administrator setup code saved to .local/admin-setup-token",
-    );
-  }
-  await query("INSERT INTO auth_setup (id,tokenHash) VALUES (1,?)", [
-    createHash("sha256").update(token).digest("hex"),
-  ]);
-}
+if (!userEmail)
+  await query("ALTER TABLE users ADD COLUMN email VARCHAR(254) NULL UNIQUE");
 if (process.argv.includes("--seed")) {
   const names = [
     ["Olivia Rhye", "Design", "Product Designer"],
