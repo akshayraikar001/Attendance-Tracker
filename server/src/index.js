@@ -1,3 +1,4 @@
+import { startLocalDatabaseMonitor } from "./local-database.js";
 import { registerAuth } from "./auth.js";
 import { registerAdminRoutes } from "./admin.js";
 import { recalculateAttendance } from "./recalculate.js";
@@ -256,8 +257,16 @@ app.use("/api", (req, res) =>
   res.status(404).json({ error: "Endpoint not found" }),
 );
 const dist = fileURLToPath(new URL("../../client/dist", import.meta.url));
-app.use(express.static(dist));
-app.get("*", (req, res) => res.sendFile(path.join(dist, "index.html")));
+app.use(
+  express.static(dist, {
+    setHeaders(res, file) {
+      if (file.endsWith(".html")) res.setHeader("Cache-Control", "no-store");
+    },
+  }),
+);
+app.get("*", (req, res) =>
+  res.set("Cache-Control", "no-store").sendFile(path.join(dist, "index.html")),
+);
 app.use((err, req, res, next) => {
   console.error(err.message);
   res
@@ -274,6 +283,7 @@ app.use((err, req, res, next) => {
             : "Database unavailable. Check MySQL and run npm run db:setup."),
     });
 });
+await startLocalDatabaseMonitor();
 app.listen(process.env.PORT || 3001, "0.0.0.0", () =>
   console.log("Attendance API listening on port " + (process.env.PORT || 3001)),
 );

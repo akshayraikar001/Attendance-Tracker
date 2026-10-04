@@ -33,6 +33,7 @@ export default function AuthGate({ children }) {
     };
     window.addEventListener("session-expired", expired);
     let cancelled = false;
+    let retryTimer;
     async function load() {
       try {
         const response = await fetch("/api/auth/me", {
@@ -46,8 +47,12 @@ export default function AuthGate({ children }) {
             "We can't connect to your workspace right now. Please try again shortly.",
           );
         }
+        if (!cancelled) setError("");
       } catch (e) {
-        if (!cancelled) setError(e.message);
+        if (!cancelled) {
+          setError("Reconnecting to your workspace… Please wait a moment.");
+          retryTimer = setTimeout(load, 5000);
+        }
       } finally {
         if (!cancelled) setLoading(false);
       }
@@ -55,6 +60,7 @@ export default function AuthGate({ children }) {
     load();
     return () => {
       cancelled = true;
+      clearTimeout(retryTimer);
       window.removeEventListener("session-expired", expired);
     };
   }, []);

@@ -15,6 +15,10 @@ if ! mysqladmin --socket="$local_dir/mysql.sock" -uroot ping >/dev/null 2>&1; th
     sleep 1
   done
 fi
+if ! mysqladmin --socket="$local_dir/mysql.sock" -uroot ping >/dev/null 2>&1; then
+  echo 'Local database did not start. Check .local/mysql.log.' >&2
+  exit 1
+fi
 mysql --socket="$local_dir/mysql.sock" -uroot < "$project_dir/server/database.sql"
 if [ ! -f "$project_dir/.env" ]; then
   sed 's/DB_PORT=3306/DB_PORT=3307/' "$project_dir/.env.example" > "$project_dir/.env"

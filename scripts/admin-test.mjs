@@ -15,6 +15,7 @@ const port = listener.address().port;
 await new Promise((resolve) => listener.close(resolve));
 const env = {
   ...process.env,
+  DB_LOCAL_MANAGED: "false",
   DB_HOST: "127.0.0.1",
   DB_PORT: "3307",
   DB_NAME: database,

@@ -23,10 +23,12 @@ const { render, screen, fireEvent, cleanup, waitFor } =
   await import("@testing-library/react");
 const React = await import("react");
 const requests = [];
+let connectionFailures = 1;
 globalThis.fetch = async (url, options = {}) => {
   const body = options.body ? JSON.parse(options.body) : null;
   requests.push({ url, body });
-  if (url === "/api/auth/me") return { ok: false, status: 401 };
+  if (url === "/api/auth/me")
+    return { ok: false, status: connectionFailures-- > 0 ? 503 : 401 };
   if (url === "/api/auth/register" || url === "/api/auth/login")
     return { ok: true, json: async () => ({ name: "Test Person" }) };
   throw new Error(url);
@@ -51,6 +53,21 @@ try {
       ),
     );
   draw();
+  await screen.findByText(
+    "Reconnecting to your workspace… Please wait a moment.",
+  );
+  await waitFor(
+    () =>
+      assert.equal(
+        Boolean(
+          screen.queryByText(
+            "Reconnecting to your workspace… Please wait a moment.",
+          ),
+        ),
+        false,
+      ),
+    { timeout: 7000 },
+  );
   await screen.findByRole("heading", { name: "Welcome back" });
   fireEvent.click(
     screen.getByRole("button", { name: "New to Dayline? Create account" }),

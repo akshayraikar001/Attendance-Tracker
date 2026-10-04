@@ -577,7 +577,45 @@ export default function App({
               </button>
               <span className="live-dot" /> Your people, in sync{" "}
               <span className="divider" />
-              <span className="avatar admin small-avatar">AD</span>
+              <details className="account-menu">
+                <summary>
+                  Account <ChevronDown size={16} aria-hidden="true" />
+                </summary>
+                <div className="account-menu-panel">
+                  <strong>{user.name}</strong>
+                  <small>{user.role}</small>
+                  {[
+                    "My account",
+                    ...(user.role === "Admin"
+                      ? ["Settings", "User management"]
+                      : []),
+                  ].map((destination) => (
+                    <button
+                      type="button"
+                      key={destination}
+                      onClick={(event) => {
+                        event.currentTarget
+                          .closest("details")
+                          .removeAttribute("open");
+                        navigate(destination);
+                      }}
+                    >
+                      {destination}
+                    </button>
+                  ))}
+                  <button
+                    type="button"
+                    onClick={(event) => {
+                      event.currentTarget
+                        .closest("details")
+                        .removeAttribute("open");
+                      onLogout().catch((e) => setToast(e.message));
+                    }}
+                  >
+                    <LogOut size={17} aria-hidden="true" /> Sign out
+                  </button>
+                </div>
+              </details>
             </div>
           </header>
           <main>

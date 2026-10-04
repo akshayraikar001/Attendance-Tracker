@@ -35,6 +35,8 @@ npm run db:setup
 npm run dev
 ```
 
+Set `DB_LOCAL_MANAGED=true` in `.env` when using this local instance (host `127.0.0.1`, port `3307`, database `attendance_tracker`). The API starts it before accepting requests, applies the schema without deleting data, and checks every five seconds to restart it if it stops. This option requires the local MariaDB tools and should remain false for Docker or external databases.
+
 The isolated data lives in the gitignored `.local/` folder. This optional helper requires MariaDB installed on the machine.
 
 ## Features
