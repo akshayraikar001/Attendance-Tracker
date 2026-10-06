@@ -1,3 +1,5 @@
+import { savedPage } from "./lib/navigation.js";
+import WhatsAppSettings from "./components/WhatsAppSettings.jsx";
 import EmployeeReport from "./components/EmployeeReport.jsx";
 import UserManagement, {
   AccountSettings,
@@ -46,6 +48,7 @@ import {
   AlertCircle,
   Briefcase,
   Mail,
+  MessageCircle,
 } from "lucide-react";
 const today = () => new Date().toLocaleDateString("en-CA");
 const initialDate = today();
@@ -71,17 +74,18 @@ const initials = (n) =>
     .map((x) => x[0])
     .slice(0, 2)
     .join("");
-async function api(url, body, method = "POST") {
+async function api(url, body, method) {
+  const requestMethod = method || (body === undefined ? "GET" : "POST");
   const res = await fetch(
     "/api" + url,
-    body
+    body !== undefined || requestMethod !== "GET"
       ? {
-          method,
+          method: requestMethod,
           headers: {
             "Content-Type": "application/json",
             "X-Requested-With": "Dayline",
           },
-          body: JSON.stringify(body),
+          ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
         }
       : undefined,
   );
@@ -114,7 +118,7 @@ export default function App({
       /* Storage can be disabled. */
     }
   }, [theme]);
-  const [page, setPage] = useState("Overview"),
+  const [page, setPage] = useState(() => savedPage(localStorage, user.role)),
     [employees, setEmployees] = useState([]),
     [records, setRecords] = useState([]),
     [holidays, setHolidays] = useState([]),
@@ -134,6 +138,23 @@ export default function App({
     [from, setFrom] = useState(initialDate.slice(0, 7) + "-01"),
     [to, setTo] = useState(initialDate),
     [reportTab, setReportTab] = useState("Daily report");
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const reportTabLabel = (tab) => {
+    if (tab === "Daily report") {
+      const d = new Date(date + "T12:00:00");
+      return `${d.toLocaleDateString("en-GB")} Daily report`;
+    }
+    if (tab === "Monthly report") {
+      const d = new Date(date + "T12:00:00");
+      return `${d.toLocaleDateString("en-US", { month: "long", year: "numeric" })} Monthly report`;
+    }
+    return tab;
+  };
+  useEffect(() => {
+    try {
+      localStorage.setItem("dayline-page", page);
+    } catch {}
+  }, [page]);
   async function load() {
     try {
       const [e, a, r, h, holidays, catalog] = await Promise.all([
@@ -192,7 +213,9 @@ export default function App({
   ];
   const match = (e) =>
     (!search ||
-      (e.name + " " + e.email).toLowerCase().includes(search.toLowerCase())) &&
+      (e.name + " " + e.email + " " + (e.phone || ""))
+        .toLowerCase()
+        .includes(search.toLowerCase())) &&
     (department === "All departments" || department === e.department);
   const rows = employees
     .filter(
@@ -249,19 +272,26 @@ export default function App({
     }
   }
   function selectAttendance(employeeId, entryDate) {
-    const employee = employees.find((e) => e.id === Number(employeeId));
+    const numericEmployeeId = Number(employeeId);
+    const employee = employees.find((e) => e.id === numericEmployeeId);
     const existing = records.find(
-      (r) => r.employeeId === Number(employeeId) && r.date === entryDate,
+      (r) => r.employeeId === numericEmployeeId && r.date === entryDate,
     );
-    const timing = effectiveRules(rules, employee);
+    const timing = {
+      ...defaultRules,
+      ...(effectiveRules(rules || defaultRules, employee) || {}),
+    };
+    const safeDate = /^\d{4}-\d{2}-\d{2}$/.test(entryDate || "")
+      ? entryDate
+      : initialDate;
     setModal({
       type: "attendance",
       data: {
-        employeeId,
-        date: entryDate,
+        employeeId: numericEmployeeId || active[0]?.id || "",
+        date: safeDate,
         mode: existing?.mode || "time",
-        inTime: existing?.inTime || timing.shiftStart,
-        outTime: existing?.outTime || "",
+        inTime: typeof existing?.inTime === "string" ? existing.inTime : timing.shiftStart,
+        outTime: typeof existing?.outTime === "string" ? existing.outTime : "",
         overnight: Boolean(existing?.overnight),
         status: ["Present", "Absent", "Half day", "Attended"].includes(
           existing?.status,
@@ -273,15 +303,20 @@ export default function App({
     });
   }
   function openAttendance(row) {
-    selectAttendance(row?.employeeId || active[0]?.id || "", row?.date || date);
+    const employeeId = Number(row?.employeeId || active[0]?.id || 0);
+    selectAttendance(employeeId, row?.date || date || initialDate);
   }
   const entryEmployee = employees.find(
     (e) => e.id === Number(modal?.data?.employeeId),
   );
-  const entryRules = effectiveRules(rules, entryEmployee);
-  const entryRuleSource = rules.employeeRules?.[entryEmployee?.id]
+  const entryRules = {
+    ...defaultRules,
+    ...(effectiveRules(rules || defaultRules, entryEmployee) || {}),
+  };
+  const safeRules = rules || defaultRules;
+  const entryRuleSource = safeRules.employeeRules?.[entryEmployee?.id]
     ? "Custom employee timings"
-    : rules.groupRules?.[entryEmployee?.department]
+    : safeRules.groupRules?.[entryEmployee?.department]
       ? entryEmployee.department + " group timings"
       : "Workspace timings";
   const changeDate = (n) => {
@@ -342,8 +377,8 @@ export default function App({
               {reportMode && <th>Date</th>}
               <th>Department</th>
               <th>Status</th>
-              <th>Clock in</th>
-              <th>Clock out</th>
+              <th>In time</th>
+              <th>Out time</th>
               <th>Work hours</th>
               {reportMode ? (
                 <>
@@ -423,14 +458,7 @@ export default function App({
                   <button
                     className="icon-btn"
                     aria-label={"Edit attendance for " + row.name}
-                    onClick={() => {
-                      openAttendance(row);
-                      if (row.date)
-                        setModal((m) => ({
-                          ...m,
-                          data: { ...m.data, date: row.date },
-                        }));
-                    }}
+                    onClick={() => openAttendance(row)}
                   >
                     <Ellipsis size={18} />
                   </button>
@@ -460,13 +488,13 @@ export default function App({
   return (
     <TimeFormatContext.Provider value={rules.timeFormat ?? "12h"}>
       <div className="app">
-        <aside className="sidebar">
+        <aside className={`sidebar${sidebarCollapsed ? " collapsed" : ""}`}>
           <a
             className="brand"
             href="#"
             onClick={(e) => {
               e.preventDefault();
-              navigate("Overview");
+              setSidebarCollapsed((v) => !v);
             }}
           >
             <span className="brand-icon">
@@ -482,11 +510,12 @@ export default function App({
               [CalendarDays, "Calendar"],
               [Users, "Employees"],
               [ChartNoAxesCombined, "Reports"],
+              [MessageCircle, "WhatsApp"],
             ].map(([Icon, name]) => (
               <button
                 key={name}
                 className={page === name ? "active" : ""}
-                onClick={() => navigate(name)}
+                onClick={() => navigate(name === "WhatsApp" ? "WhatsApp attendance" : name)}
               >
                 <Icon size={19} />
                 {name}
@@ -497,20 +526,6 @@ export default function App({
             ))}
           </nav>
           <div className="sidebar-bottom">
-            <div className="help-card">
-              <span className="help-icon">
-                <Sun size={22} />
-              </span>
-              <strong>A little clarity. Every day.</strong>
-              <p>
-                Less admin, more time for
-                <br />
-                the people who matter.
-              </p>
-              <button onClick={() => navigate("Attendance")}>
-                Manage attendance <ArrowUpRight size={15} />
-              </button>
-            </div>
             {user.role === "Admin" && (
               <button
                 className={
@@ -635,7 +650,9 @@ export default function App({
                             ? "Your people"
                             : page === "Reports"
                               ? "Attendance reports"
-                              : "Attendance register"}
+                              : page === "WhatsApp attendance"
+                                ? "WhatsApp attendance"
+                                : "Attendance register"}
                 </h1>
                 <p>
                   {page === "Overview"
@@ -644,6 +661,8 @@ export default function App({
                       ? "Good teams start with great people. Keep everyone in one place."
                       : page === "Reports"
                         ? "Every hour accounted for. Every detail, ready when you need it."
+                        : page === "WhatsApp attendance"
+                          ? "Import attendance messages from one WhatsApp group."
                         : page === "Settings"
                           ? "Set the rules that make sense for your team."
                           : "Keep each workday accurate, one entry at a time."}
@@ -659,6 +678,7 @@ export default function App({
                         data: {
                           name: "",
                           email: "",
+                          phone: "",
                           department: departments.includes("Development")
                             ? "Development"
                             : departments[0] || "",
@@ -671,10 +691,9 @@ export default function App({
                     <Plus size={17} /> Add employee
                   </button>
                 ) : (
-                  page !== "Settings" && (
+                  ["Overview", "Attendance", "Calendar", "Reports"].includes(page) && (
                     <>
-                      {!(
-                        page === "Reports" &&
+                      {page === "Reports" && !(
                         [
                           "Daily report",
                           "Monthly report",
@@ -781,7 +800,7 @@ export default function App({
                     {active.length} active employees
                   </span>
                 </div>
-                <div className="stat-grid">
+                {page === "Overview" && <div className="stat-grid">
                   {[
                     {
                       title: "Total employees",
@@ -837,7 +856,7 @@ export default function App({
                       <div className="stat-foot">{s.foot}</div>
                     </div>
                   ))}
-                </div>
+                </div>}
                 {page === "Overview" && (
                   <div className="chart-grid">
                     <section className="card trend-card">
@@ -1127,6 +1146,9 @@ export default function App({
                         <Mail size={14} />
                         {e.email || "No email added"}
                       </div>
+                      <div className="employee-email">
+                        Phone: {e.phone || "Not added"}
+                      </div>
                       <button
                         className="button"
                         onClick={() => setModal({ type: "employee", data: e })}
@@ -1162,7 +1184,7 @@ export default function App({
                     className={reportTab === tab ? "selected" : ""}
                     onClick={() => setReportTab(tab)}
                   >
-                    {tab}
+                    {reportTabLabel(tab)}
                   </button>
                 ))}
               </div>
@@ -1391,6 +1413,14 @@ export default function App({
                   </section>
                 </>
               )}
+            {page === "WhatsApp attendance" && user.role === "Admin" && (
+              <WhatsAppSettings
+                api={api}
+                employees={employees}
+                onEmployees={() => navigate("Employees")}
+                onReload={load}
+              />
+            )}
             {page === "Settings" && (
               <WorkspaceSettings
                 rules={rules}
@@ -1442,7 +1472,6 @@ export default function App({
             className="modal-backdrop"
             onClick={(e) => {
               if (
-                modal.type !== "attendance" &&
                 e.target === e.currentTarget &&
                 !saving
               )
@@ -1470,7 +1499,7 @@ export default function App({
                       : "Record attendance"}
                   </h2>
                 </div>
-                {modal.type !== "attendance" && (
+                {(
                   <button
                     className="icon-btn"
                     aria-label="Close dialog"
@@ -1485,6 +1514,22 @@ export default function App({
                 onSubmit={(e) => {
                   e.preventDefault();
                   const d = modal.data;
+                  if (
+                    modal.type === "attendance" &&
+                    d.mode === "time" &&
+                    !d.inTime &&
+                    !d.outTime
+                  ) {
+                    setSaving(true);
+                    api(`/attendance/${Number(d.employeeId)}/${d.date}`, undefined, "DELETE")
+                      .then(async () => {
+                        await load();
+                        setToast("Clock-in and clock-out cleared");
+                      })
+                      .catch((error) => setToast(error.message))
+                      .finally(() => setSaving(false));
+                    return;
+                  }
                   modal.type === "employee"
                     ? save(
                         "/employees" + (d.id ? "/" + d.id : ""),
@@ -1521,14 +1566,33 @@ export default function App({
                       {[
                         ["name", "Full name", "text"],
                         ["email", "Email address (optional)", "email"],
+                        ["phone", "WhatsApp phone number (optional)", "tel"],
                         ["department", "Department", "text"],
                         ["role", "Job title", "text"],
                       ].map(([k, l, t]) => (
                         <label key={k}>
                           {l}
-                          <input
+                          {k === "department" ? (
+                            <select
+                              required
+                              value={modal.data.department ?? ""}
+                              onChange={(e) =>
+                                setModal({
+                                  ...modal,
+                                  data: { ...modal.data, department: e.target.value },
+                                })
+                              }
+                            >
+                              <option value="">Select department</option>
+                              {departments.map((department) => (
+                                <option key={department} value={department}>
+                                  {department}
+                                </option>
+                              ))}
+                            </select>
+                          ) : <input
                             autoFocus={k === "name"}
-                            required={k !== "email"}
+                            required={!["email", "phone"].includes(k)}
                             type={t}
                             list={
                               k === "role"
@@ -1537,7 +1601,12 @@ export default function App({
                                   ? "employee-departments"
                                   : undefined
                             }
-                            maxLength={k === "email" ? 160 : 80}
+                            maxLength={
+                              k === "email" ? 160 : k === "phone" ? 40 : 80
+                            }
+                            placeholder={
+                              k === "phone" ? "+919999999999" : undefined
+                            }
                             value={modal.data[k] ?? ""}
                             onChange={(e) =>
                               setModal({
@@ -1545,7 +1614,13 @@ export default function App({
                                 data: { ...modal.data, [k]: e.target.value },
                               })
                             }
-                          />
+                          />}
+                          {k === "phone" && (
+                            <small>
+                              Include the country code. This number is used for
+                              WhatsApp attendance.
+                            </small>
+                          )}
                         </label>
                       ))}
                       <label>
@@ -1622,8 +1697,8 @@ export default function App({
                         <>
                           <div className="form-grid">
                             {[
-                              ["inTime", "Clock in"],
-                              ["outTime", "Clock out"],
+                              ["inTime", "In time"],
+                              ["outTime", "Out time"],
                             ].map(([k, l]) => (
                               <div className="time-field" key={k}>
                                 <div className="time-field-heading">
@@ -1636,7 +1711,10 @@ export default function App({
                                     onClick={() =>
                                       setModal({
                                         ...modal,
-                                        data: { ...modal.data, [k]: "" },
+                                        data:
+                                          k === "inTime"
+                                            ? { ...modal.data, inTime: "", outTime: "" }
+                                            : { ...modal.data, [k]: "" },
                                         timeReset: {
                                           ...modal.timeReset,
                                           [k]: (modal.timeReset?.[k] || 0) + 1,
@@ -1650,7 +1728,7 @@ export default function App({
                                 <TimeInput
                                   key={`${modal.data.employeeId}:${modal.data.date}:${modal.timeReset?.[k] || 0}`}
                                   id={"attendance-" + k}
-                                  required={k === "inTime"}
+                                  required={k === "inTime" && Boolean(modal.data.outTime)}
                                   value={modal.data[k] ?? ""}
                                   onChange={(e) =>
                                     setModal({
@@ -1665,6 +1743,23 @@ export default function App({
                               </div>
                             ))}
                           </div>
+                          <button
+                            type="button"
+                            className="button"
+                            disabled={saving || !modal.data.employeeId}
+                            onClick={async () => {
+                              setSaving(true);
+                              try {
+                                await api(`/attendance/${modal.data.employeeId}/${modal.data.date}`, undefined, "DELETE");
+                                await load();
+                                setModal({ ...modal, data: { ...modal.data, inTime: "", outTime: "" }, timeReset: {} });
+                                setToast("Clock-in and clock-out cleared");
+                              } catch (e) { setToast(e.message); }
+                              finally { setSaving(false); }
+                            }}
+                          >
+                            Clear both times
+                          </button>
                           <label className="checkbox">
                             <input
                               type="checkbox"
@@ -1679,7 +1774,7 @@ export default function App({
                                 })
                               }
                             />
-                            Clock out is the following day
+                            Out time is the following day
                           </label>
                           <div className="entry-hint">
                             <Clock size={17} />

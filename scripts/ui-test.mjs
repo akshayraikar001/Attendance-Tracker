@@ -191,11 +191,10 @@ try {
   );
   assert.ok(screen.getByRole("dialog"));
   fireEvent.click(dialog.parentElement);
-  assert.ok(screen.getByRole("dialog"));
-  assert.equal(
-    within(dialog).queryByRole("button", { name: "Close dialog" }),
-    null,
-  );
+  assert.equal(screen.queryByRole("dialog"), null);
+  fireEvent.click(screen.getByRole("button", { name: "Record attendance" }));
+  dialog = screen.getByRole("dialog");
+  assert.ok(within(dialog).getByRole("button", { name: "Close dialog" }));
   fireEvent.change(within(dialog).getByLabelText("Employee"), {
     target: { value: "2" },
   });
@@ -203,12 +202,12 @@ try {
     within(dialog).getByPlaceholderText("Add a little context…").value,
     "Second employee note",
   );
-  assert.equal(within(dialog).getByLabelText("Clock in").value, "10:00 AM");
-  assert.equal(within(dialog).getByLabelText("Clock out").value, "");
+  assert.equal(within(dialog).getByLabelText("In time").value, "10:00 AM");
+  assert.equal(within(dialog).getByLabelText("Out time").value, "");
   fireEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
   assert.equal(screen.queryByRole("dialog"), null);
   console.log(
-    "PASS: attendance saves stay open, backdrop does not close, switching employees reloads their entry, Cancel closes.",
+    "PASS: attendance saves stay open, backdrop closes, reopening and switching employees reload their entry, Cancel closes.",
   );
   fireEvent.click(screen.getByRole("button", { name: "Reports" }));
   assert.ok(screen.getByRole("heading", { name: "Daily report · " + today }));
@@ -218,7 +217,12 @@ try {
   assert.ok(screen.getByText("First Person"));
   assert.equal(screen.queryByText("Second Person"), null);
   console.log("PASS: simple daily report is the default and filters by group.");
-  fireEvent.click(screen.getByRole("button", { name: "Settings" }));
+  fireEvent.click(
+    within(document.querySelector(".sidebar")).getByRole("button", {
+      name: "Settings",
+      exact: true,
+    }),
+  );
   fireEvent.change(screen.getByLabelText("Configure timings for"), {
     target: { value: "group" },
   });
@@ -361,14 +365,14 @@ try {
   assert.equal(within(dialog).getByLabelText("Date").value, nextDate);
   fireEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
   fireEvent.click(screen.getByRole("button", { name: "Reports" }));
-  fireEvent.click(screen.getByRole("button", { name: "Daily report" }));
+  fireEvent.click(screen.getByRole("button", { name: /Daily report$/ }));
   assert.ok(screen.getAllByText("Holiday").length >= 2);
   console.log(
     "PASS: calendar navigation, holiday create/edit/remove, preserve work, unmarked holiday status, selected-day editing and daily report.",
   );
 
   assert.equal(screen.queryByText("My workspace"), null);
-  fireEvent.click(screen.getByRole("button", { name: "Monthly report" }));
+  fireEvent.click(screen.getByRole("button", { name: /Monthly report$/ }));
   fireEvent.change(screen.getByLabelText("Report month"), {
     target: { value: "2026-10" },
   });
@@ -449,7 +453,12 @@ try {
   console.log(
     "PASS: bulk form requires review, invalidates changed previews, defaults to preserving existing entries and skipping holidays, and applies only on request.",
   );
-  fireEvent.click(screen.getByRole("button", { name: "Settings" }));
+  fireEvent.click(
+    within(document.querySelector(".sidebar")).getByRole("button", {
+      name: "Settings",
+      exact: true,
+    }),
+  );
   fireEvent.click(screen.getByRole("button", { name: "Departments" }));
   fireEvent.change(screen.getByLabelText("New department"), {
     target: { value: "Operations" },
@@ -505,9 +514,7 @@ try {
   fireEvent.click(screen.getByRole("button", { name: "Save timings" }));
   await waitFor(() => assert.equal(settings.shiftStart, "12:30"));
   fireEvent.click(screen.getByRole("button", { name: "Reports", exact: true }));
-  fireEvent.click(
-    screen.getByRole("button", { name: "Daily report", exact: true }),
-  );
+  fireEvent.click(screen.getByRole("button", { name: /Daily report$/ }));
   fireEvent.change(screen.getByLabelText("Day"), { target: { value: today } });
   assert.ok(screen.getAllByText(/10:00 AM/).length);
   console.log(
@@ -526,7 +533,11 @@ try {
     target: { value: today },
   });
   assert.ok(screen.getByRole("heading", { name: "Second Person" }));
-  assert.ok(screen.getByText(entries.find(e => e.employeeId === 2 && e.date === today).notes));
+  assert.ok(
+    screen.getByText(
+      entries.find((e) => e.employeeId === 2 && e.date === today).notes,
+    ),
+  );
   assert.ok(screen.getByText("10:00 AM"));
   assert.ok(screen.getByText("No email provided"));
   console.log(

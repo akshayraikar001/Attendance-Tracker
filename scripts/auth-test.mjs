@@ -16,6 +16,7 @@ await new Promise((resolve) => listener.close(resolve));
 const env = {
   ...process.env,
   DB_LOCAL_MANAGED: "false",
+  CHATERY_MANAGED_PATH: "",
   DB_HOST: "127.0.0.1",
   DB_PORT: "3307",
   DB_NAME: database,
@@ -182,6 +183,8 @@ try {
   const staffCookie = signedStaff.cookie;
   await request("/employees", null, { session: staffCookie });
   await request("/users", null, { session: staffCookie, expected: 403 });
+  await request("/whatsapp", null, { session: staffCookie, expected: 403 });
+  await request("/whatsapp/connect", {}, { session: staffCookie, expected: 403 });
   const settings = (await request("/settings")).result;
   await request("/settings", settings, {
     method: "PUT",

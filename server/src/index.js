@@ -1,3 +1,6 @@
+import { saveEmployeePhone } from "./employee-phone.js";
+import { ensureChatery } from "./chatery.js";
+import { registerWhatsApp } from "./whatsapp.js";
 import { startLocalDatabaseMonitor } from "./local-database.js";
 import { registerAuth } from "./auth.js";
 import { registerAdminRoutes } from "./admin.js";
@@ -44,6 +47,7 @@ async function transaction(fn) {
 }
 registerAuth({ app, wrap, transaction, audit, query });
 registerAdminRoutes({ app, wrap, transaction, audit, query });
+const whatsapp = registerWhatsApp({ app, wrap, transaction, audit, query });
 async function ensureCatalog(c, e) {
   for (const [kind, name] of [
     ["departments", e.department],
@@ -115,8 +119,9 @@ app.post(
       await ensureCatalog(c, e);
       const [r] = await c.execute(
         "INSERT INTO employees (name,email,department,role,status) VALUES (?,?,?,?,?)",
-        Object.values(e),
+        [e.name, e.email, e.department, e.role, e.status],
       );
+      e.phone = await saveEmployeePhone(c, r.insertId, e.phone ?? null);
       await audit(c, "Employee added", "employee", r.insertId, e);
       return r.insertId;
     });
@@ -138,8 +143,10 @@ app.put(
         throw Object.assign(new Error("Employee not found"), { status: 404 });
       await c.execute(
         "UPDATE employees SET name=?,email=?,department=?,role=?,status=? WHERE id=?",
-        [...Object.values(e), req.params.id],
+        [e.name, e.email, e.department, e.role, e.status, req.params.id],
       );
+      if (e.phone !== undefined)
+        await saveEmployeePhone(c, Number(req.params.id), e.phone);
       await audit(c, "Employee updated", "employee", Number(req.params.id), {
         before: old[0],
         after: e,
@@ -247,6 +254,23 @@ app.post(
     res.json({ ok: true, ...calc });
   }),
 );
+app.delete(
+  "/api/attendance/:employeeId/:date",
+  wrap(async (req, res) => {
+    const employeeId = Number(req.params.employeeId);
+    const date = req.params.date;
+    if (!Number.isInteger(employeeId) || employeeId < 1 || !/^\d{4}-\d{2}-\d{2}$/.test(date))
+      return res.status(400).json({ error: "Invalid attendance record." });
+    await transaction(async (c) => {
+      const [old] = await c.execute("SELECT * FROM attendance WHERE employeeId=? AND date=? FOR UPDATE", [employeeId, date]);
+      if (old.length) {
+        await c.execute("DELETE FROM attendance WHERE employeeId=? AND date=?", [employeeId, date]);
+        await audit(c, "Attendance times cleared", "attendance", employeeId, { date, before: old[0] });
+      }
+    });
+    res.json({ ok: true, cleared: true });
+  }),
+);
 app.get(
   "/api/audit",
   wrap(async (req, res) =>
@@ -284,6 +308,10 @@ app.use((err, req, res, next) => {
     });
 });
 await startLocalDatabaseMonitor();
+if (process.env.CHATERY_MANAGED_PATH)
+  ensureChatery().catch((error) => console.error(error.message));
+const whatsappTimer = setInterval(() => whatsapp.poll({ automatic: true }), 15000);
+whatsappTimer.unref();
 app.listen(process.env.PORT || 3001, "0.0.0.0", () =>
   console.log("Attendance API listening on port " + (process.env.PORT || 3001)),
 );

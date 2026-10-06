@@ -110,6 +110,60 @@ svg {
   padding: 30px 19px 0;
   z-index: 10;
 }
+.sidebar-toggle {
+  margin: 18px 0 0;
+  width: 100%;
+  border: 0;
+  background: transparent;
+  color: #747d77;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px;
+  cursor: pointer;
+}
+.sidebar.collapsed {
+  width: 74px;
+  padding-inline: 12px;
+}
+.sidebar.collapsed .brand {
+  justify-content: center;
+  padding-inline: 0;
+  font-size: 0;
+}
+.sidebar.collapsed .brand-icon { margin: 0; }
+.sidebar.collapsed .nav-label,
+.sidebar.collapsed nav button:not(.active)::after,
+.sidebar.collapsed nav button,
+.sidebar.collapsed .settings-nav,
+.sidebar.collapsed .sidebar-toggle span,
+.sidebar.collapsed .profile strong,
+.sidebar.collapsed .profile small { font-size: 0; }
+.sidebar.collapsed nav button,
+.sidebar.collapsed .settings-nav,
+.sidebar.collapsed .sidebar-toggle { justify-content: center; padding-inline: 8px; }
+.sidebar.collapsed nav button svg,
+.sidebar.collapsed .settings-nav svg,
+.sidebar.collapsed .sidebar-toggle svg { flex: 0 0 auto; }
+.sidebar.collapsed + .main-shell { margin-left: 74px; }
+.sidebar.collapsed .nav-count { display: none; }
+.whatsapp-link-details {
+  margin: 18px 0;
+  border-top: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+  padding: 14px 0;
+}
+.whatsapp-link-details summary {
+  cursor: pointer;
+  color: var(--text);
+  font-weight: 600;
+}
+.whatsapp-link-form {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-top: 14px;
+}
 .brand {
   display: flex;
   align-items: center;
@@ -3522,3 +3576,12 @@ textarea {
   .topbar { height: auto; min-height: 50px; gap: 8px; flex-wrap: wrap; padding-top: 6px; padding-bottom: 6px; }
   .topbar-right { gap: 8px; margin-left: auto; }
 }
+
+.whatsapp-settings { padding: 24px; margin-bottom: 24px; }
+.whatsapp-settings p { line-height: 1.6; overflow-wrap: anywhere; }
+.whatsapp-settings form { margin: 18px 0; }
+.whatsapp-settings .checkbox { margin: 16px 0; }
+.whatsapp-actions { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
+.whatsapp-actions input, .whatsapp-actions select { min-width: 180px; max-width: 100%; padding: 10px; border: 1px solid var(--border); border-radius: 6px; }
+.whatsapp-qr img { width: 240px; max-width: 100%; background: white; padding: 12px; }
+.whatsapp-settings td { white-space: normal; min-width: 150px; overflow-wrap: anywhere; }

@@ -1,3 +1,4 @@
+import { normalizePhone } from "../../shared/phone.js";
 import { z } from "zod";
 export const defaults = {
   fullDayHours: 8,
@@ -58,6 +59,20 @@ export function resolveRules(settings, employee) {
   );
 }
 export const employeeSchema = z.object({
+  phone: z
+    .string()
+    .max(40)
+    .nullable()
+    .optional()
+    .transform((value, ctx) => {
+      if (value === undefined) return undefined;
+      try {
+        return normalizePhone(value);
+      } catch (error) {
+        ctx.addIssue({ code: "custom", message: error.message });
+        return z.NEVER;
+      }
+    }),
   name: z.string().trim().min(2).max(100),
   email: z.preprocess(
     (value) =>

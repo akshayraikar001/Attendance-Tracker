@@ -10,6 +10,11 @@ const [emailColumn] = await query(
 if (emailColumn.IS_NULLABLE === "NO") {
   await query("ALTER TABLE employees MODIFY COLUMN email VARCHAR(160) NULL");
 }
+const [employeePhone] = await query(
+  "SELECT COLUMN_NAME FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='employees' AND COLUMN_NAME='phone'",
+);
+if (!employeePhone)
+  await query("ALTER TABLE employees ADD COLUMN phone VARCHAR(16) NULL UNIQUE");
 await query(
   `CREATE TABLE IF NOT EXISTS settings (id INT PRIMARY KEY, rules JSON NOT NULL)`,
 );
@@ -60,6 +65,82 @@ const [userEmail] = await query(
 );
 if (!userEmail)
   await query("ALTER TABLE users ADD COLUMN email VARCHAR(254) NULL UNIQUE");
+await query(
+  `CREATE TABLE IF NOT EXISTS whatsapp_config (id INT PRIMARY KEY,config JSON NOT NULL)`,
+);
+await query("INSERT IGNORE INTO whatsapp_config (id,config) VALUES (1,?)", [
+  JSON.stringify({
+    enabled: false,
+    sessionId: "dayline-attendance",
+    groupId: "",
+    groupName: "Insight - Attendance",
+    timeZone: "",
+    autoApprove: false,
+    autoOverwrite: false,
+    since: 0,
+  }),
+]);
+await query(
+  `CREATE TABLE IF NOT EXISTS whatsapp_links (identity VARCHAR(160) PRIMARY KEY,employeeId INT NOT NULL,FOREIGN KEY(employeeId) REFERENCES employees(id))`,
+);
+await query(
+  `CREATE TABLE IF NOT EXISTS whatsapp_events (id CHAR(64) PRIMARY KEY,sessionId VARCHAR(80) NOT NULL,groupId VARCHAR(160) NOT NULL,messageId VARCHAR(160) NOT NULL,senderId VARCHAR(160) NOT NULL,senderName VARCHAR(200) NOT NULL,text TEXT NOT NULL,timestamp BIGINT NOT NULL,employeeId INT NULL,date DATE NULL,state VARCHAR(20) NOT NULL,reason VARCHAR(500) NOT NULL,createdAt TIMESTAMP DEFAULT CURRENT_TIMESTAMP,INDEX(state),INDEX(timestamp))`,
+);
+await query(
+  `CREATE TABLE IF NOT EXISTS whatsapp_days (employeeId INT NOT NULL,date DATE NOT NULL,snapshotHash CHAR(64) NOT NULL,PRIMARY KEY(employeeId,date))`,
+);
+await query(
+  `CREATE TABLE IF NOT EXISTS whatsapp_sync_queue (id CHAR(64) PRIMARY KEY,timestamp BIGINT NOT NULL,message JSON NOT NULL,INDEX(timestamp))`,
+);
+// Adopt an existing unambiguous international mapping, without guessing a country code.
+const existingPhoneLinks = await query(
+  "SELECT l.identity,l.employeeId,e.phone FROM whatsapp_links l JOIN employees e ON e.id=l.employeeId WHERE l.identity LIKE 'phone:%'",
+);
+for (const employeeId of new Set(existingPhoneLinks.map((l) => l.employeeId))) {
+  const links = existingPhoneLinks.filter((l) => l.employeeId === employeeId);
+  const valid = links.filter((l) => /^phone:[1-9]\d{10,14}$/.test(l.identity));
+  if (!links[0].phone && valid.length === 1) {
+    const phone = "+" + valid[0].identity.slice(6);
+    const [owner] = await query(
+      "SELECT id FROM employees WHERE phone=? AND id<>?",
+      [phone, employeeId],
+    );
+    if (!owner) {
+      await query("UPDATE employees SET phone=? WHERE id=? AND phone IS NULL", [
+        phone,
+        employeeId,
+      ]);
+      for (const link of links)
+        if (
+          link.identity !== valid[0].identity &&
+          valid[0].identity.slice(6).endsWith(link.identity.slice(6))
+        ) {
+          await query(
+            "DELETE FROM whatsapp_links WHERE identity=? AND employeeId=?",
+            [link.identity, employeeId],
+          );
+        }
+    }
+  }
+}
+const [whatsappSettings] = await query(
+  "SELECT config FROM whatsapp_config WHERE id=1",
+);
+if (whatsappSettings) {
+  const config =
+    typeof whatsappSettings.config === "string"
+      ? JSON.parse(whatsappSettings.config)
+      : whatsappSettings.config;
+  if (
+    !config.timeZone &&
+    existingPhoneLinks.some((link) => link.identity.startsWith("phone:91"))
+  ) {
+    config.timeZone = "Asia/Kolkata";
+    await query("UPDATE whatsapp_config SET config=? WHERE id=1", [
+      JSON.stringify(config),
+    ]);
+  }
+}
 if (process.argv.includes("--seed")) {
   const names = [
     ["Olivia Rhye", "Design", "Product Designer"],
