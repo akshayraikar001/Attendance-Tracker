@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "node --watch src/index.js",
     "start": "node src/index.js",
-    "db:setup": "node src/setup.js",
+    "db:setup": "node src/database/setup.js",
     "test": "node --test test/*.test.js"
   },
   "dependencies": {

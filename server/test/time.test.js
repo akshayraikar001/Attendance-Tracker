@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { formatTime, parseTime } from "../../shared/time.js";
-import { defaults, settingsSchema } from "../src/rules.js";
+import { defaults, settingsSchema } from "../src/services/rules.js";
 test("clock display handles midnight, noon, afternoon, blanks and 24-hour format without timezone conversion", () => {
   for (const [value, label] of [
     ["00:00", "12:00 AM"],
