@@ -8,7 +8,7 @@ import {
   employeeSchema,
   settingsSchema,
   resolveRules,
-} from "../src/rules.js";
+} from "../src/services/rules.js";
 const entry = {
   mode: "time",
   inTime: "09:00",
@@ -260,4 +260,79 @@ test("legacy break settings never deduct time at any policy level", () => {
   assert.equal(rules.breakMinutes, 0);
   assert.equal(rules.groupRules.Sales.breakMinutes, 0);
   assert.equal(rules.employeeRules[1].breakMinutes, 0);
+});
+
+test("opt-in break deduction reduces worked time, classification and overtime without shifting clocks", () => {
+  const enabled = { ...defaults, breakDeductionEnabled: true };
+  const result = calculate(entry, enabled);
+  assert.equal(result.workedMinutes, 480);
+  assert.equal(result.overtimeMinutes, 0);
+  assert.equal(result.earlyMinutes, 0);
+  assert.equal(
+    calculate({ ...entry, outTime: "13:00" }, enabled).status,
+    "Attended",
+  );
+  assert.equal(
+    calculate({ ...entry, outTime: "09:30" }, enabled).workedMinutes,
+    0,
+  );
+  assert.equal(
+    calculate({ ...entry, outTime: null }, enabled).workedMinutes,
+    null,
+  );
+  assert.equal(
+    calculate({ mode: "manual", status: "Half day" }, enabled).workedMinutes,
+    null,
+  );
+});
+test("weekday shifts resolve for the attendance date with employee, group and workspace priority", () => {
+  const settings = settingsSchema.parse({
+    ...defaults,
+    breakDeductionEnabled: true,
+    weekdayShifts: { 6: { shiftStart: "10:00", shiftEnd: "16:00" } },
+    groupRules: {
+      Sales: {
+        ...defaults,
+        weekdayShifts: { 6: { shiftStart: "11:00", shiftEnd: "17:00" } },
+      },
+    },
+    employeeRules: {
+      1: {
+        ...defaults,
+        weekdayShifts: { 6: { shiftStart: "12:00", shiftEnd: "18:00" } },
+      },
+    },
+  });
+  assert.equal(
+    resolveRules(settings, { id: 1, department: "Sales" }, "2026-10-10")
+      .shiftStart,
+    "12:00",
+  );
+  assert.equal(
+    resolveRules(settings, { id: 2, department: "Sales" }, "2026-10-10")
+      .shiftStart,
+    "11:00",
+  );
+  assert.equal(
+    resolveRules(settings, { id: 3, department: "Other" }, "2026-10-10")
+      .shiftEnd,
+    "16:00",
+  );
+  assert.equal(
+    resolveRules(settings, { id: 1, department: "Sales" }, "2026-10-09")
+      .shiftStart,
+    "09:00",
+  );
+  assert.equal(
+    resolveRules(settings, { id: 1, department: "Sales" }, "2026-10-10")
+      .breakDeductionEnabled,
+    true,
+  );
+  assert.equal(
+    settingsSchema.safeParse({
+      ...defaults,
+      weekdayShifts: { 7: { shiftStart: "10:00", shiftEnd: "16:00" } },
+    }).success,
+    false,
+  );
 });

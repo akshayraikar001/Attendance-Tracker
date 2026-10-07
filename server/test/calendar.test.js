@@ -15,7 +15,7 @@ import {
   entrySchema,
   settingsSchema,
   employeeSchema,
-} from "../src/rules.js";
+} from "../src/services/rules.js";
 test("Sunday is a neutral holiday by default, named holidays and custom weekdays work", () => {
   assert.equal(holidayForDate("2026-10-04").weekly, true);
   assert.equal(holidayForDate("2026-10-05"), null);

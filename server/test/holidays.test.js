@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { holidayDateSchema, holidaySchema } from "../src/rules.js";
+import { holidayDateSchema, holidaySchema } from "../src/services/rules.js";
 test("holiday dates validate actual calendar dates and SQL date bounds", () => {
   assert.equal(holidayDateSchema.parse("2028-02-29"), "2028-02-29");
   for (const date of [
