@@ -33,7 +33,14 @@ export default function DailyReport({
         (holiday ? "Holiday" : "Unmarked"),
     }));
   const groups = [...new Set(employees.map((e) => e.department))];
-  const fields = ["Name", "In time", "Out time", "Total hours", "Status"];
+  const fields = [
+    "Name",
+    "In time",
+    "Out time",
+    "Total hours",
+    "Status",
+    "Notes",
+  ];
   const values = (r) => [
     r.name,
     clock(r.inTime),
@@ -42,6 +49,7 @@ export default function DailyReport({
       ? "—"
       : `${Math.floor(r.workedMinutes / 60)}h ${r.workedMinutes % 60}m`,
     r.status,
+    r.notes || "—",
   ];
   async function download() {
     setExporting(true);
@@ -115,7 +123,7 @@ export default function DailyReport({
               <tr key={r.employeeId}>
                 {values(r).map((v, i) => (
                   <td key={i}>
-                    {i === fields.length - 1 ? (
+                    {i === 4 ? (
                       <span
                         className={
                           "badge " + r.status.toLowerCase().replaceAll(" ", "-")

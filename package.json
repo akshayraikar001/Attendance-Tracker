@@ -27,7 +27,11 @@
     "test:whatsapp:ui": "node tests/ui/whatsapp-ui-test.mjs",
     "test:leave": "node tests/integration/leave-test.mjs",
     "test:leave:ui": "node tests/ui/leave-ui-test.mjs",
-    "test:automation": "node tests/integration/automation-test.mjs"
+    "test:automation": "node tests/integration/automation-test.mjs",
+    "test:employee:ui": "node tests/ui/employee-ui-test.mjs",
+    "test:users:ui": "node tests/ui/user-management-test.mjs",
+    "test:locations:ui": "node tests/ui/locations-ui-test.mjs",
+    "test:time-away:ui": "node tests/ui/time-away-ui-test.mjs"
   },
   "devDependencies": {
     "@testing-library/react": "^16.3.3",

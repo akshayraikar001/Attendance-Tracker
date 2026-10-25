@@ -1,5 +1,7 @@
 const pages = new Set([
   "Overview",
+  "Time away",
+  "Location tracking",
   "Attendance",
   "Calendar",
   "Employees",
@@ -16,7 +18,13 @@ export function savedPage(storage, role) {
     if (!pages.has(page)) return "Overview";
     if (
       role !== "Admin" &&
-      ["Settings", "User management", "Leave Approval"].includes(page)
+      [
+        "Settings",
+        "User management",
+        "Leave Approval",
+        "Time away",
+        "Location tracking",
+      ].includes(page)
     )
       return "Overview";
     return page;

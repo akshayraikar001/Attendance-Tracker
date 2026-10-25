@@ -23,6 +23,10 @@ export default function AuthGate({ children }) {
   const [mode, setMode] = useState("login");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
+  const [authStatus, setAuthStatus] = useState({
+    setupRequired: false,
+    keycloakEnabled: false,
+  });
   const [legacy, setLegacy] = useState(false);
   useEffect(() => {
     document.documentElement.dataset.theme =
@@ -36,6 +40,8 @@ export default function AuthGate({ children }) {
     let retryTimer;
     async function load() {
       try {
+        const status = await authApi("/auth/status");
+        if (!cancelled) setAuthStatus(status);
         const response = await fetch("/api/auth/me", {
           credentials: "same-origin",
         });
@@ -47,7 +53,12 @@ export default function AuthGate({ children }) {
             "We can't connect to your workspace right now. Please try again shortly.",
           );
         }
-        if (!cancelled) setError("");
+        if (!cancelled)
+          setError(
+            new URLSearchParams(window.location.search).has("authError")
+              ? "Keycloak sign-in failed. Check that your administrator linked and enabled your account, then try again."
+              : "",
+          );
       } catch (e) {
         if (!cancelled) {
           setError("Reconnecting to your workspace… Please wait a moment.");
@@ -79,6 +90,7 @@ export default function AuthGate({ children }) {
         setError("Passwords do not match.");
         return;
       }
+      setAuthStatus((s) => ({ ...s, setupRequired: false }));
       setUser(
         await authApi(
           mode === "register" ? "/auth/register" : "/auth/login",
@@ -182,16 +194,23 @@ export default function AuthGate({ children }) {
         <button className="primary" disabled={busy}>
           {busy ? "Please wait…" : registering ? "Create account" : "Sign in"}
         </button>
-        <button
-          type="button"
-          className="button"
-          disabled={busy}
-          onClick={() => switchMode(mode === "login" ? "register" : "login")}
-        >
-          {mode === "login"
-            ? "New to Dayline? Create account"
-            : "Back to sign in"}
-        </button>
+        {authStatus.keycloakEnabled && (
+          <a className="button" href="/api/auth/keycloak/login">
+            Sign in with Keycloak
+          </a>
+        )}
+        {(authStatus.setupRequired || registering) && (
+          <button
+            type="button"
+            className="button"
+            disabled={busy}
+            onClick={() => switchMode(mode === "login" ? "register" : "login")}
+          >
+            {mode === "login"
+              ? "New to Dayline? Create account"
+              : "Back to sign in"}
+          </button>
+        )}
         {mode === "login" && (
           <button
             type="button"
@@ -202,7 +221,7 @@ export default function AuthGate({ children }) {
               setError("");
             }}
           >
-            {legacy ? "Use email instead" : "Have an older username account?"}
+            {legacy ? "Use email instead" : "Sign in with username"}
           </button>
         )}
       </form>

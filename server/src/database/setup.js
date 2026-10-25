@@ -15,6 +15,36 @@ const [employeePhone] = await query(
 );
 if (!employeePhone)
   await query("ALTER TABLE employees ADD COLUMN phone VARCHAR(16) NULL UNIQUE");
+const [locationColumn] = await query(
+  "SELECT COLUMN_NAME FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='employees' AND COLUMN_NAME='locationTrackingEnabled'",
+);
+if (!locationColumn)
+  await query(
+    "ALTER TABLE employees ADD COLUMN locationTrackingEnabled BOOLEAN NOT NULL DEFAULT 0",
+  );
+await query(`CREATE TABLE IF NOT EXISTS location_checkins (
+ id INT AUTO_INCREMENT PRIMARY KEY,employeeId INT NOT NULL,
+ latitude DOUBLE NOT NULL,longitude DOUBLE NOT NULL,accuracy DOUBLE NOT NULL,
+ capturedAt DATETIME(3) NOT NULL,receivedAt DATETIME(3) NOT NULL,
+ note VARCHAR(500) NOT NULL DEFAULT '',photo MEDIUMBLOB NULL,photoType VARCHAR(30) NULL,
+ FOREIGN KEY(employeeId) REFERENCES employees(id),INDEX(employeeId,receivedAt)
+)`);
+await query(
+  `CREATE TABLE IF NOT EXISTS location_config (id INT PRIMARY KEY, embedKey VARCHAR(255) NULL, geocodingKey VARCHAR(255) NULL)`,
+);
+await query("INSERT IGNORE INTO location_config (id) VALUES (1)");
+for (const [name, definition] of [
+  ["provider", "VARCHAR(16) NOT NULL DEFAULT 'google'"],
+  ["geoapifyKey", "VARCHAR(255) NULL"],
+]) {
+  const [column] = await query(
+    "SELECT COLUMN_NAME FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='location_config' AND COLUMN_NAME=?",
+    [name],
+  );
+  if (!column)
+    await query(`ALTER TABLE location_config ADD COLUMN ${name} ${definition}`);
+}
+
 await query(
   `CREATE TABLE IF NOT EXISTS settings (id INT PRIMARY KEY, rules JSON NOT NULL)`,
 );
@@ -26,6 +56,9 @@ await query(
 );
 await query(
   `CREATE TABLE IF NOT EXISTS auto_clockouts (employeeId INT NOT NULL,date DATE NOT NULL,createdAt TIMESTAMP DEFAULT CURRENT_TIMESTAMP,PRIMARY KEY(employeeId,date))`,
+);
+await query(
+  `CREATE TABLE IF NOT EXISTS auto_absences (employeeId INT NOT NULL,date DATE NOT NULL,snapshotHash CHAR(64) NULL,createdAt TIMESTAMP DEFAULT CURRENT_TIMESTAMP,PRIMARY KEY(employeeId,date))`,
 );
 await query(
   `CREATE TABLE IF NOT EXISTS holidays (id INT AUTO_INCREMENT PRIMARY KEY,date DATE NOT NULL UNIQUE,name VARCHAR(100) NOT NULL,active BOOLEAN NOT NULL DEFAULT 1,updatedAt TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP)`,
@@ -68,6 +101,30 @@ const [userEmail] = await query(
 );
 if (!userEmail)
   await query("ALTER TABLE users ADD COLUMN email VARCHAR(254) NULL UNIQUE");
+// Preserve existing accounts while adding employee and external identity links.
+for (const [name, definition] of [
+  [
+    "employeeId",
+    "INT NULL UNIQUE, ADD FOREIGN KEY (employeeId) REFERENCES employees(id)",
+  ],
+  [
+    "keycloakSubject",
+    "VARCHAR(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NULL UNIQUE",
+  ],
+]) {
+  const [column] = await query(
+    "SELECT COLUMN_NAME FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='users' AND COLUMN_NAME=?",
+    [name],
+  );
+  if (!column)
+    await query(`ALTER TABLE users ADD COLUMN ${name} ${definition}`);
+}
+await query(`CREATE TABLE IF NOT EXISTS time_away (
+  id INT AUTO_INCREMENT PRIMARY KEY, employeeId INT NOT NULL, date DATE NOT NULL,
+  departedAt DATETIME NOT NULL, returnedAt DATETIME NULL, reason VARCHAR(500) NOT NULL DEFAULT '',
+  createdBy INT NOT NULL, updatedAt TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  FOREIGN KEY(employeeId) REFERENCES employees(id), INDEX(employeeId,date)
+)`);
 await query(
   `CREATE TABLE IF NOT EXISTS whatsapp_config (id INT PRIMARY KEY,config JSON NOT NULL)`,
 );
@@ -89,6 +146,11 @@ await query(
 await query(
   `CREATE TABLE IF NOT EXISTS whatsapp_events (id CHAR(64) PRIMARY KEY,sessionId VARCHAR(80) NOT NULL,groupId VARCHAR(160) NOT NULL,messageId VARCHAR(160) NOT NULL,senderId VARCHAR(160) NOT NULL,senderName VARCHAR(200) NOT NULL,text TEXT NOT NULL,timestamp BIGINT NOT NULL,employeeId INT NULL,date DATE NULL,state VARCHAR(20) NOT NULL,reason VARCHAR(500) NOT NULL,createdAt TIMESTAMP DEFAULT CURRENT_TIMESTAMP,INDEX(state),INDEX(timestamp))`,
 );
+const clearedColumn = await query(
+  "SELECT COLUMN_NAME FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='whatsapp_events' AND COLUMN_NAME='clearedAt'",
+);
+if (!clearedColumn.length)
+  await query("ALTER TABLE whatsapp_events ADD COLUMN clearedAt DATETIME NULL");
 await query(
   `CREATE TABLE IF NOT EXISTS whatsapp_days (employeeId INT NOT NULL,date DATE NOT NULL,snapshotHash CHAR(64) NOT NULL,PRIMARY KEY(employeeId,date))`,
 );

@@ -1,4 +1,4 @@
-import React from "react";
+import React, { useEffect, useRef } from "react";
 import {
   LayoutDashboard,
   CalendarDays,
@@ -8,9 +8,13 @@ import {
   CheckCheck,
   Settings,
   LogOut,
+  X,
+  UserRound,
 } from "lucide-react";
 
 export default function Sidebar({
+  mobileMenuOpen,
+  setMobileMenuOpen,
   sidebarCollapsed,
   setSidebarCollapsed,
   user,
@@ -20,86 +24,160 @@ export default function Sidebar({
   onLogout,
   setToast,
 }) {
+  const sidebar = useRef(null);
+  useEffect(() => {
+    const media = window.matchMedia?.("(min-width: 951px)");
+    if (!media) return;
+    const closeOnDesktop = () => {
+      if (media.matches) setMobileMenuOpen(false);
+    };
+    media.addEventListener("change", closeOnDesktop);
+    return () => media.removeEventListener("change", closeOnDesktop);
+  }, [setMobileMenuOpen]);
+  useEffect(() => {
+    if (!mobileMenuOpen) return;
+    const previous = document.activeElement;
+    const overflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    sidebar.current.querySelector(".mobile-nav-close")?.focus();
+    const keydown = (event) => {
+      if (event.key === "Escape") setMobileMenuOpen(false);
+      if (event.key !== "Tab") return;
+      const items = [
+        ...sidebar.current.querySelectorAll("button, a[href]"),
+      ].filter((el) => el.getClientRects().length && !el.disabled);
+      const first = items[0],
+        last = items.at(-1);
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last?.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first?.focus();
+      }
+    };
+    document.addEventListener("keydown", keydown);
+    return () => {
+      document.body.style.overflow = overflow;
+      document.removeEventListener("keydown", keydown);
+      previous?.focus();
+    };
+  }, [mobileMenuOpen, setMobileMenuOpen]);
   return (
-    <aside className={`sidebar${sidebarCollapsed ? " collapsed" : ""}`}>
-      <a
-        className="brand"
-        href="#"
-        onClick={(e) => {
-          e.preventDefault();
-          setSidebarCollapsed((v) => !v);
-        }}
+    <>
+      {mobileMenuOpen && (
+        <button
+          className="workspace-shade"
+          aria-label="Close navigation backdrop"
+          tabIndex={-1}
+          onClick={() => setMobileMenuOpen(false)}
+        />
+      )}
+      <aside
+        id="workspace-sidebar"
+        ref={sidebar}
+        aria-label="Workspace sidebar"
+        className={`sidebar${sidebarCollapsed ? " collapsed" : ""}${mobileMenuOpen ? " is-open" : ""}`}
       >
-        <span className="brand-icon">
-          d<span>•</span>
-        </span>
-        dayline<span className="brand-dot">.</span>
-      </a>
-      <span className="nav-label">WORKSPACE</span>
-      <nav>
-        {[
-          [LayoutDashboard, "Overview"],
-          [CalendarDays, "Attendance"],
-          [CalendarDays, "Calendar"],
-          [Users, "Employees"],
-          [ChartNoAxesCombined, "Reports"],
-          [MessageCircle, "WhatsApp"],
-          ...(user.role === "Admin" ? [[CheckCheck, "Leave Approval"]] : []),
-        ].map(([Icon, name]) => (
-          <button
-            key={name}
-            className={
-              page === (name === "WhatsApp" ? "WhatsApp attendance" : name)
-                ? "active"
-                : ""
-            }
-            onClick={() =>
-              navigate(name === "WhatsApp" ? "WhatsApp attendance" : name)
-            }
-          >
-            <Icon size={19} />
-            {name}
-            {name === "Employees" && (
-              <span className="nav-count">{employees.length}</span>
-            )}
-          </button>
-        ))}
-      </nav>
-      <div className="sidebar-bottom">
-        {user.role === "Admin" && (
-          <button
-            className={"settings-nav " + (page === "Settings" ? "active" : "")}
-            onClick={() => navigate("Settings")}
-          >
-            <Settings size={19} /> Settings
-          </button>
-        )}
-        {user.role === "Admin" && (
+        <button
+          className="mobile-nav-close button"
+          aria-label="Close navigation"
+          onClick={() => setMobileMenuOpen(false)}
+        >
+          <X size={20} />
+        </button>
+        <a
+          className="brand"
+          href="#"
+          onClick={(e) => {
+            e.preventDefault();
+            setSidebarCollapsed((v) => !v);
+          }}
+        >
+          <span className="brand-icon">
+            d<span>•</span>
+          </span>
+          dayline<span className="brand-dot">.</span>
+        </a>
+        <span className="nav-label">WORKSPACE</span>
+        <nav aria-label="Workspace navigation">
+          {[
+            [LayoutDashboard, "Overview"],
+            [CalendarDays, "Attendance"],
+            [CalendarDays, "Calendar"],
+            [Users, "Employees"],
+            [ChartNoAxesCombined, "Reports"],
+            [MessageCircle, "WhatsApp"],
+            ...(user.role === "Admin"
+              ? [
+                  [CheckCheck, "Leave Approval"],
+                  [CalendarDays, "Time away"],
+                  [CalendarDays, "Location tracking"],
+                ]
+              : []),
+          ].map(([Icon, name]) => (
+            <button
+              key={name}
+              title={name}
+              aria-label={name}
+              className={
+                page === (name === "WhatsApp" ? "WhatsApp attendance" : name)
+                  ? "active"
+                  : ""
+              }
+              onClick={() =>
+                navigate(name === "WhatsApp" ? "WhatsApp attendance" : name)
+              }
+            >
+              <Icon size={19} />
+              {name}
+              {name === "Employees" && (
+                <span className="nav-count">{employees.length}</span>
+              )}
+            </button>
+          ))}
+        </nav>
+        <div className="sidebar-bottom">
+          {user.role === "Admin" && (
+            <button
+              className={
+                "settings-nav " + (page === "Settings" ? "active" : "")
+              }
+              onClick={() => navigate("Settings")}
+            >
+              <Settings size={19} /> Settings
+            </button>
+          )}
+          {user.role === "Admin" && (
+            <button
+              className="settings-nav"
+              onClick={() => navigate("User management")}
+            >
+              <Users size={19} /> User management
+            </button>
+          )}
           <button
             className="settings-nav"
-            onClick={() => navigate("User management")}
+            onClick={() => navigate("My account")}
           >
-            <Users size={19} /> User management
+            <UserRound size={19} /> My account
           </button>
-        )}
-        <button className="settings-nav" onClick={() => navigate("My account")}>
-          My account
-        </button>
-        <button
-          className="settings-nav"
-          onClick={() => onLogout().catch((e) => setToast(e.message))}
-        >
-          <LogOut size={19} /> Sign out
-        </button>
-        <div className="profile">
-          <span className="avatar admin">AD</span>
-          <div>
-            <strong>{user.name}</strong>
-            <small>{user.role}</small>
+          <button
+            className="settings-nav"
+            onClick={() => onLogout().catch((e) => setToast(e.message))}
+          >
+            <LogOut size={19} /> Sign out
+          </button>
+          <div className="profile">
+            <span className="avatar admin">AD</span>
+            <div>
+              <strong>{user.name}</strong>
+              <small>{user.role}</small>
+            </div>
+            <span className="online-dot" />
           </div>
-          <span className="online-dot" />
         </div>
-      </div>
-    </aside>
+      </aside>
+    </>
   );
 }

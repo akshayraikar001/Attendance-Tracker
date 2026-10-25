@@ -1,6 +1,7 @@
 import { app, whatsapp } from "./app.js";
 import { transaction, audit } from "./database/transactions.js";
 import { createAutoClockOut } from "./services/auto-clockout.js";
+import { createAutoAbsent } from "./services/auto-absence.js";
 import { ensureChatery } from "./integrations/chatery.js";
 import { startLocalDatabaseMonitor } from "./services/local-database.js";
 await startLocalDatabaseMonitor();
@@ -20,6 +21,14 @@ const runAutoClockOut = () =>
 runAutoClockOut();
 const autoClockOutTimer = setInterval(runAutoClockOut, 60000);
 autoClockOutTimer.unref();
+const autoAbsent = createAutoAbsent({ transaction, audit });
+const runAutoAbsent = () =>
+  autoAbsent().catch((error) =>
+    console.error("Automatic absence:", error.message),
+  );
+runAutoAbsent();
+const autoAbsentTimer = setInterval(runAutoAbsent, 60000);
+autoAbsentTimer.unref();
 app.listen(process.env.PORT || 3001, "0.0.0.0", () =>
   console.log("Attendance API listening on port " + (process.env.PORT || 3001)),
 );

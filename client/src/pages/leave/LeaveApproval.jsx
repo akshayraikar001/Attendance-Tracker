@@ -1,3 +1,4 @@
+import { withoutMentions } from "../../../../shared/message-text.js";
 import React, { useEffect, useState } from "react";
 export default function LeaveApproval({
   api,
@@ -75,7 +76,7 @@ export default function LeaveApproval({
     if (
       review.overwrite &&
       !window.confirm(
-        `Replace existing attendance from ${review.from} to ${review.to} for this employee? Existing In/Out times on those dates will be removed.`,
+        `Replace existing attendance from ${review.from} to ${review.to} for this employee? Saved In/Out times on those dates will be kept.`,
       )
     )
       return;
@@ -146,11 +147,6 @@ export default function LeaveApproval({
           Sync leave requests
         </button>
       </div>
-      <p className="muted">
-        Example: “I am on leave tomorrow” uses the date the message was sent.
-        “Leave from 8 to 10 Oct” includes all three days. Confirm suggested
-        dates before approving.
-      </p>
       {state.syncProgress && (
         <p role="status">
           Shared sync is continuing through saved history. Requests appear as
@@ -209,7 +205,7 @@ export default function LeaveApproval({
                 { timeZone: state.timeZone || "UTC" },
               )}
             </small>
-            <blockquote>{request.text}</blockquote>
+            <blockquote>{withoutMentions(request.text) || "—"}</blockquote>
             <p>
               <strong>
                 {request.kind === "Absent" ? "Leave / Absent" : "Half day"}
@@ -219,7 +215,6 @@ export default function LeaveApproval({
                 ? `${request.fromDate} → ${request.toDate}`
                 : "Dates need review"}
             </p>
-            {request.reason && <p className="muted">{request.reason}</p>}
             {request.state === "pending" && review?.id !== request.id && (
               <button
                 className="button"
@@ -299,8 +294,9 @@ export default function LeaveApproval({
                     Replace existing attendance on these dates
                   </label>
                   <small>
-                    Leave unchecked to protect saved In/Out times and statuses.
-                    A conflict blocks the entire approval.
+                    Leave unchecked to protect existing statuses. Saved In/Out
+                    times are kept either way. A conflict blocks the entire
+                    approval.
                   </small>
                   <div className="whatsapp-actions">
                     <button className="primary" type="submit">

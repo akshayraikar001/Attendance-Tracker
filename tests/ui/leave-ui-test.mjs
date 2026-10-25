@@ -99,6 +99,8 @@ try {
   };
   render(React.createElement(Component, props));
   await screen.findByRole("checkbox", { name: "Allow Leave Approval" });
+  assert.ok(screen.getByText("sir leave from 8 to 10 oct"));
+  assert.equal(screen.queryByText(/@Bharat/), null);
   assert.equal(
     screen.getByRole("button", { name: "Review request" }).disabled,
     true,

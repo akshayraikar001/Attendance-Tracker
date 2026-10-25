@@ -1,5 +1,6 @@
 import { calculate, resolveRules } from "./rules.js";
 import { localMessageTime } from "../utils/whatsapp-parser.js";
+import { formatTime } from "../../../shared/time.js";
 import { createHash } from "node:crypto";
 const parse = (value) =>
   typeof value === "string" ? JSON.parse(value) : value;
@@ -30,15 +31,27 @@ export function createAutoClockOut({ transaction, audit, now = Date.now }) {
           ]);
         }
         if (settings.autoClockOutEnabled === false) return { total: 0 };
+        const cutoff = settings.autoClockOutCutoff || "20:00";
+        const outTime = settings.autoClockOutTime || "19:05";
+        const catchUp = settings.autoClockOutCatchUp !== false;
+        if (outTime > cutoff) return { total: 0 };
         const [rows] = await c.execute(
           `SELECT a.*,e.department FROM attendance a
           JOIN employees e ON e.id=a.employeeId
           LEFT JOIN auto_clockouts done ON done.employeeId=a.employeeId AND done.date=a.date
           WHERE done.employeeId IS NULL AND e.status='Active' AND a.mode='time'
-          AND a.inTime IS NOT NULL AND a.inTime<'19:05' AND a.outTime IS NULL AND a.overnight=0
-          AND a.date>=? AND (a.date<? OR (a.date=? AND ? >= '20:00'))
+          AND a.inTime IS NOT NULL AND a.inTime<? AND a.outTime IS NULL AND a.overnight=0
+          AND a.date>=? AND ((? AND a.date<?) OR (a.date=? AND ? >= ?))
           ORDER BY a.date,a.employeeId FOR UPDATE`,
-          [settings.autoClockOutSince, local.date, local.date, local.time],
+          [
+            outTime,
+            settings.autoClockOutSince,
+            catchUp,
+            local.date,
+            local.date,
+            local.time,
+            cutoff,
+          ],
         );
         let total = 0;
         for (const row of rows) {
@@ -49,15 +62,15 @@ export function createAutoClockOut({ transaction, audit, now = Date.now }) {
           );
           if (rules.shiftEnd <= rules.shiftStart) continue;
           const result = calculate(
-            { ...row, outTime: "19:05", overnight: false },
+            { ...row, outTime, overnight: false },
             rules,
           );
-          const note =
-            "Auto Out time: 7:05 PM — no Out time received by 8:00 PM.";
+          const note = `Auto Out time: ${formatTime(outTime)} — no Out time received by ${formatTime(cutoff)}.`;
           const notes = [row.notes, note].filter(Boolean).join("\n");
           await c.execute(
-            `UPDATE attendance SET outTime='19:05',status=?,workedMinutes=?,lateMinutes=?,earlyMinutes=?,overtimeMinutes=?,notes=?,rules=? WHERE id=?`,
+            `UPDATE attendance SET outTime=?,status=?,workedMinutes=?,lateMinutes=?,earlyMinutes=?,overtimeMinutes=?,notes=?,rules=? WHERE id=?`,
             [
+              outTime,
               result.status,
               result.workedMinutes,
               result.lateMinutes,
@@ -98,7 +111,7 @@ export function createAutoClockOut({ transaction, audit, now = Date.now }) {
             {
               date: row.date,
               before,
-              after: { ...before, ...result, outTime: "19:05", notes },
+              after: { ...before, ...result, outTime, notes },
               timeZone: zone,
             },
           );

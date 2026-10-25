@@ -17,6 +17,9 @@ const bulkSchema = z
     skipHolidays: z.boolean().default(true),
     overwrite: z.boolean().default(false),
     notes: z.string().max(2000).default(""),
+    status: z
+      .enum(["Present", "Absent", "Half day", "Attended"])
+      .default("Absent"),
     previewToken: z.string().optional(),
   })
   .refine(
@@ -177,13 +180,14 @@ export function registerAdminRoutes({ app, wrap, transaction, audit, query }) {
       res.json({ ok: true });
     }),
   );
-  for (const reset of [false, true])
+  for (const operation of ["absence", "attendance", "reset"]) {
+    const reset = operation === "reset";
     for (const preview of [true, false])
       app.post(
-        `/api/attendance/bulk-${reset ? "reset" : "absence"}` +
-          (preview ? "/preview" : ""),
+        `/api/attendance/bulk-${operation}` + (preview ? "/preview" : ""),
         wrap(async (req, res) => {
           const input = bulkSchema.parse(req.body);
+          if (operation === "absence") input.status = "Absent";
           const result = await transaction(async (c) => {
             const [settingsRows] = await c.execute(
               "SELECT rules FROM settings WHERE id=1 FOR UPDATE",
@@ -280,21 +284,28 @@ export function registerAdminRoutes({ app, wrap, transaction, audit, query }) {
               }
               const rules = resolveRules(settings, employee, date);
               await c.execute(
-                `INSERT INTO attendance (employeeId,date,mode,status,notes,rules) VALUES (?,?,'manual','Absent',?,?) ON DUPLICATE KEY UPDATE mode='manual',status='Absent',inTime=NULL,outTime=NULL,overnight=0,workedMinutes=NULL,lateMinutes=NULL,earlyMinutes=NULL,overtimeMinutes=NULL,notes=VALUES(notes),rules=VALUES(rules)`,
-                [employee.id, date, input.notes, JSON.stringify(rules)],
+                `INSERT INTO attendance (employeeId,date,mode,status,notes,rules) VALUES (?,?,'manual',?,?,?) ON DUPLICATE KEY UPDATE mode='manual',status=VALUES(status),notes=VALUES(notes),rules=VALUES(rules)`,
+                [
+                  employee.id,
+                  date,
+                  input.status,
+                  input.notes,
+                  JSON.stringify(rules),
+                ],
               );
               await audit(
                 c,
-                "Bulk absence recorded",
+                "Bulk attendance recorded",
                 "attendance",
                 employee.id,
                 {
                   before: old || null,
                   after: {
+                    ...old,
                     employeeId: employee.id,
                     date,
                     mode: "manual",
-                    status: "Absent",
+                    status: input.status,
                     notes: input.notes,
                     rules,
                   },
@@ -306,4 +317,5 @@ export function registerAdminRoutes({ app, wrap, transaction, audit, query }) {
           res.json(result);
         }),
       );
+  }
 }

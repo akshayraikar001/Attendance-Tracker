@@ -42,38 +42,47 @@ export const ruleSchema = z
     (r) => r.overtimeAfterHours >= r.fullDayHours,
     "Overtime threshold must be at least full-day hours",
   );
-export const settingsSchema = ruleSchema.and(
-  z.object({
-    timeFormat: z.enum(["12h", "24h"]).default("12h"),
-    autoClockOutEnabled: z.boolean().default(true),
-    autoClockOutSince: z
-      .string()
-      .regex(/^\d{4}-\d{2}-\d{2}$/)
-      .optional(),
-    attendanceTimeZone: z
-      .string()
-      .refine((value) => {
-        try {
-          new Intl.DateTimeFormat("en", { timeZone: value });
-          return true;
-        } catch {
-          return false;
-        }
-      }, "Choose a valid timezone")
-      .optional(),
-    weeklyOffDays: z
-      .array(z.number().int().min(0).max(6))
-      .max(7)
-      .default([0])
-      .transform((days) => [...new Set(days)]),
-    groupRules: z
-      .record(z.string().trim().min(1).max(80), ruleSchema)
-      .default({}),
-    employeeRules: z
-      .record(z.string().regex(/^[1-9]\d*$/), ruleSchema)
-      .default({}),
-  }),
-);
+export const settingsSchema = ruleSchema
+  .and(
+    z.object({
+      timeFormat: z.enum(["12h", "24h"]).default("12h"),
+      autoClockOutEnabled: z.boolean().default(true),
+      autoClockOutCutoff: time.default("20:00"),
+      autoClockOutTime: time.default("19:05"),
+      autoClockOutCatchUp: z.boolean().default(true),
+      autoAbsentEnabled: z.boolean().default(false),
+      autoClockOutSince: z
+        .string()
+        .regex(/^\d{4}-\d{2}-\d{2}$/)
+        .optional(),
+      attendanceTimeZone: z
+        .string()
+        .refine((value) => {
+          try {
+            new Intl.DateTimeFormat("en", { timeZone: value });
+            return true;
+          } catch {
+            return false;
+          }
+        }, "Choose a valid timezone")
+        .optional(),
+      weeklyOffDays: z
+        .array(z.number().int().min(0).max(6))
+        .max(7)
+        .default([0])
+        .transform((days) => [...new Set(days)]),
+      groupRules: z
+        .record(z.string().trim().min(1).max(80), ruleSchema)
+        .default({}),
+      employeeRules: z
+        .record(z.string().regex(/^[1-9]\d*$/), ruleSchema)
+        .default({}),
+    }),
+  )
+  .refine(
+    (settings) => settings.autoClockOutTime <= settings.autoClockOutCutoff,
+    "Automatic Out time must be at or before the check-after time",
+  );
 export function resolveRules(settings, employee, date) {
   const selected =
     settings.employeeRules?.[employee.id] ??
@@ -170,6 +179,11 @@ export const entrySchema = z
 export const minutes = (t) =>
   t.split(":").reduce((h, m) => Number(h) * 60 + Number(m));
 export function calculate(entry, rules) {
+  if (entry.mode === "manual" && entry.inTime)
+    return {
+      ...calculate({ ...entry, mode: "time" }, rules),
+      status: entry.status,
+    };
   if (entry.mode === "manual")
     return {
       status: entry.status,

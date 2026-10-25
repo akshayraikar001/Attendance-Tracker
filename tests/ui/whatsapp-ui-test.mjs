@@ -41,6 +41,42 @@ let state = {
 const api = async (path, body, method) => {
   calls.push({ path, body, method });
   if (path === "/whatsapp") return structuredClone(state);
+  if (path === "/whatsapp?history=archived")
+    return {
+      ...structuredClone(state),
+      events: [
+        {
+          id: "archived",
+          senderId: "phone:919000000001",
+          text: "Archived IN 10:00",
+          state: "applied",
+          timestamp: Math.floor(Date.now() / 1000),
+        },
+      ],
+    };
+  if (path.startsWith("/whatsapp/messages?")) {
+    const params = new URL(path, "http://localhost").searchParams;
+    const rows = state.events.filter(
+      (event) =>
+        new Date(Number(event.timestamp) * 1000).toISOString().slice(0, 10) ===
+        params.get("date"),
+    );
+    const offset = Number(params.get("offset") || 0);
+    return {
+      events: rows.slice(offset, offset + 100),
+      hasMore: rows.length > offset + 100,
+    };
+  }
+  if (path === "/whatsapp/events" && method === "DELETE") {
+    state.events = state.events.filter(
+      (event) =>
+        !body.dates.includes(
+          new Date(Number(event.timestamp) * 1000).toISOString().slice(0, 10),
+        ),
+    );
+    state.days = state.days.filter((day) => !body.dates.includes(day.date));
+    return { ok: true };
+  }
   if (path === "/whatsapp/connect") {
     state.connection = { status: "connected", isConnected: true };
     state.qrCode = null;
@@ -55,6 +91,15 @@ const api = async (path, body, method) => {
   if (path === "/whatsapp/sync")
     return { lastSync: new Date().toISOString(), error: null };
   if (path === "/whatsapp/links") return { ok: true };
+  if (path === "/whatsapp/retry") {
+    state.events[0] = {
+      ...state.events[0],
+      senderId: "phone:919000000001",
+      senderName: "Test Person",
+      reason: "Link this WhatsApp sender to an active employee.",
+    };
+    return { state: "review", reason: state.events[0].reason };
+  }
   throw new Error(path);
 };
 const file = ".local/whatsapp-ui-test.mjs";
@@ -167,8 +212,127 @@ try {
       .value,
     "2",
   );
+  cleanup();
+  state.events = [
+    {
+      id: "a".repeat(64),
+      senderId: "unresolved",
+      senderName: "",
+      text: "@919876543210 In time 2:07",
+      timestamp: Math.floor(Date.now() / 1000),
+      state: "review",
+      reason: "Link this WhatsApp sender to an active employee.",
+    },
+  ];
+  render(
+    React.createElement(Settings, {
+      api,
+      employees: [{ id: 1, name: "Test Person", status: "Active" }],
+    }),
+  );
+  const fetchSender = await screen.findByRole("button", {
+    name: "Fetch sender",
+  });
+  assert.equal(screen.queryByText(/@919876543210/), null);
+  assert.equal(screen.queryByLabelText("Link sender unresolved"), null);
+  fireEvent.click(fetchSender);
+  await screen.findByLabelText("Link sender Test Person");
+  assert.deepEqual(calls.find((c) => c.path === "/whatsapp/retry").body, {
+    id: "a".repeat(64),
+  });
+  assert.equal(screen.queryByRole("button", { name: "Fetch sender" }), null);
+  await screen.findByRole("button", { name: "Retry" });
+  fireEvent.click(screen.getByLabelText("Show cleared history"));
+  await screen.findByText("Archived IN 10:00");
+  assert.ok(screen.getByRole("heading", { name: "Cleared message history" }));
+  fireEvent.click(screen.getByLabelText("Show cleared history"));
+  await screen.findByText("In time 2:07");
+  assert.equal(screen.queryByText("Archived IN 10:00"), null);
+
+  cleanup();
+  const today = new Date().toISOString().slice(0, 10);
+  const yesterday = new Date(Date.parse(today) - 86400000)
+    .toISOString()
+    .slice(0, 10);
+  state.config = {
+    ...state.config,
+    timeZone: "UTC",
+    enabled: true,
+    syncProgress: null,
+  };
+  state.connection = { isConnected: true, status: "connected" };
+  state.events = Array.from({ length: 101 }, (_, i) => ({
+    id: "today-" + i,
+    text: "Today message " + i,
+    senderId: "phone:919000000001",
+    timestamp: Date.parse(today + "T12:00:00Z") / 1000 + i,
+    state: "applied",
+  }));
+  state.events.push({
+    id: "yesterday",
+    text: "Yesterday message",
+    senderId: "phone:919000000001",
+    timestamp: Date.parse(yesterday + "T12:00:00Z") / 1000,
+    state: "applied",
+  });
+  state.days = [
+    { date: today, count: 101 },
+    { date: yesterday, count: 1 },
+  ];
+  window.confirm = () => true;
+  render(React.createElement(Settings, { api, employees: [] }));
+  await screen.findByText("Today message 0");
+  assert.equal(screen.queryByText("Yesterday message"), null);
+  assert.equal(
+    screen
+      .getByLabelText("Select " + today)
+      .closest(".whatsapp-message-day")
+      .querySelector("details").open,
+    true,
+  );
+  const older = screen
+    .getByLabelText("Select " + yesterday)
+    .closest(".whatsapp-message-day")
+    .querySelector("details");
+  assert.equal(older.open, false);
+  fireEvent.click(screen.getByRole("button", { name: "Load more messages" }));
+  await screen.findByText("Today message 100");
+  fireEvent.click(older.querySelector("summary"));
+  await screen.findByText("Yesterday message");
+  fireEvent.click(screen.getByLabelText("Select all days"));
+  fireEvent.click(screen.getByRole("button", { name: "Sync selected days" }));
+  await waitFor(() =>
+    assert.equal(
+      screen.getByRole("button", { name: "Sync selected days" }).disabled,
+      false,
+    ),
+  );
+  assert.deepEqual(
+    calls.filter((c) => c.path === "/whatsapp/sync").at(-1).body.dates,
+    [today, yesterday],
+  );
+  fireEvent.click(screen.getByLabelText("Select " + today));
+  fireEvent.click(screen.getByRole("button", { name: "Clear selected days" }));
+  await waitFor(() =>
+    assert.equal(screen.queryByLabelText("Select " + yesterday), null),
+  );
+  assert.equal(state.events.length, 101);
+  fireEvent.click(screen.getByRole("button", { name: "Sync all history" }));
+  await waitFor(() =>
+    assert.equal(
+      screen.getByRole("button", { name: "Sync all history" }).disabled,
+      false,
+    ),
+  );
+  assert.deepEqual(
+    calls.filter((c) => c.path === "/whatsapp/sync").at(-1).body,
+    { all: true },
+  );
   console.log(
-    "PASS: QR pairing, group/timezone selection, saved sync controls, manual sync, progress display and sender mapping.",
+    "PASS: daily collapse defaults, full history pagination, bulk day sync/clear, and sync all controls.",
+  );
+  console.log(
+    "PASS: QR pairing, group/timezone selection, saved sync controls, manual sync, progress display, sender mapping and unresolved sender recovery.",
   );
 } finally {
   cleanup();

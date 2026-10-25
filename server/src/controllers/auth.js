@@ -1,3 +1,4 @@
+import { registerKeycloak, keycloakEnabled } from "./keycloak.js";
 import {
   randomBytes,
   scrypt as scryptCallback,
@@ -19,7 +20,9 @@ const credentials = z.object({
 });
 const profile = z.object({
   name: z.string().trim().min(2).max(100),
-  role: z.enum(["Admin", "Staff"]),
+  role: z.enum(["Admin", "Staff", "Employee"]),
+  employeeId: z.coerce.number().int().positive().nullable().optional(),
+  keycloakSubject: z.string().trim().min(1).max(255).nullable().optional(),
   active: z.boolean().default(true),
 });
 const publicUser = (u) => ({
@@ -29,6 +32,8 @@ const publicUser = (u) => ({
   name: u.name,
   role: u.role,
   active: Boolean(u.active),
+  employeeId: u.employeeId || null,
+  keycloakSubject: u.keycloakSubject || null,
 });
 const fail = (message, status = 400) =>
   Object.assign(new Error(message), { status });
@@ -91,7 +96,10 @@ export function registerAuth({ app, wrap, query, transaction, audit }) {
     "/api/auth/status",
     wrap(async (req, res) => {
       const [row] = await query("SELECT COUNT(*) AS total FROM users");
-      res.json({ setupRequired: row.total === 0 });
+      res.json({
+        setupRequired: row.total === 0,
+        keycloakEnabled: keycloakEnabled(),
+      });
     }),
   );
   app.post(
@@ -124,7 +132,9 @@ export function registerAuth({ app, wrap, query, transaction, audit }) {
             409,
           );
         const [users] = await c.execute("SELECT id FROM users LIMIT 1");
-        const role = users.length ? "Staff" : "Admin";
+        if (users.length)
+          throw fail("Ask your administrator to create an account.", 403);
+        const role = "Admin";
         const username = "email_" + randomBytes(16).toString("hex");
         const [r] = await c.execute(
           "INSERT INTO users (username,email,name,passwordHash,role,active) VALUES (?,?,?,?,?,1)",
@@ -146,6 +156,7 @@ export function registerAuth({ app, wrap, query, transaction, audit }) {
       res.status(201).json(await loginSession(req, res, user));
     }),
   );
+  registerKeycloak({ app, wrap, query, loginSession });
   app.post(
     "/api/auth/login",
     wrap(async (req, res) => {
@@ -164,6 +175,8 @@ export function registerAuth({ app, wrap, query, transaction, audit }) {
           : "SELECT * FROM users WHERE username=? AND email IS NULL",
         [data.email || data.username],
       );
+      if (u?.keycloakSubject && keycloakEnabled())
+        throw fail("Use Sign in with Keycloak for this account.", 403);
       const hash =
         u?.passwordHash ||
         "00000000000000000000000000000000:" + "00".repeat(64);
@@ -187,6 +200,34 @@ export function registerAuth({ app, wrap, query, transaction, audit }) {
       );
       if (!u) throw fail("Please sign in to continue.", 401);
       req.user = publicUser(u);
+      if (u.role === "Employee") {
+        const allowed =
+          (req.method === "GET" &&
+            [
+              "/auth/me",
+              "/me/attendance",
+              "/me/profile",
+              "/me/time-away",
+              "/me/locations",
+            ].includes(req.path)) ||
+          (req.method === "GET" &&
+            /^\/location-(?:photos|areas|maps)\/\d+$/.test(req.path)) ||
+          (req.method === "POST" &&
+            ["/auth/logout", "/auth/password", "/me/locations"].includes(
+              req.path,
+            ));
+        if (!allowed)
+          throw fail(
+            "Employee accounts have read-only access to their own attendance.",
+            403,
+          );
+        if (!u.employeeId && req.path.startsWith("/me/"))
+          throw fail(
+            "Ask your administrator to link your employee record.",
+            403,
+          );
+      } else if (!["Admin", "Staff"].includes(u.role))
+        throw fail("Access denied.", 403);
       if (
         req.method !== "GET" &&
         /^\/(settings|catalog|holidays)(\/|$)/.test(req.path) &&
@@ -218,6 +259,8 @@ export function registerAuth({ app, wrap, query, transaction, audit }) {
         })
         .parse(req.body);
       const [u] = await query("SELECT * FROM users WHERE id=?", [req.user.id]);
+      if (u.keycloakSubject && keycloakEnabled())
+        throw fail("Manage your password in Keycloak.", 403);
       if (!(await verify(data.currentPassword, u.passwordHash)))
         throw fail("Current password is incorrect.", 400);
       const hash = await passwordHash(data.password);
@@ -246,21 +289,40 @@ export function registerAuth({ app, wrap, query, transaction, audit }) {
       res.json(
         (
           await query(
-            "SELECT id,username,email,name,role,active FROM users ORDER BY name",
+            "SELECT id,username,email,name,role,active,employeeId,keycloakSubject FROM users ORDER BY name",
           )
         ).map(publicUser),
       ),
     ),
   );
+  async function checkEmployee(c, data) {
+    if (data.role === "Employee" && !data.employeeId)
+      throw fail("Select an employee for this account.");
+    if (data.employeeId) {
+      const [rows] = await c.execute("SELECT id FROM employees WHERE id=?", [
+        data.employeeId,
+      ]);
+      if (!rows.length) throw fail("Employee not found.");
+    }
+  }
   app.post(
     "/api/users",
     wrap(async (req, res) => {
       const data = credentials.merge(profile).parse(req.body);
       const hash = await passwordHash(data.password);
       const id = await transaction(async (c) => {
+        await checkEmployee(c, data);
         const [r] = await c.execute(
-          "INSERT INTO users (username,name,passwordHash,role,active) VALUES (?,?,?,?,?)",
-          [data.username, data.name, hash, data.role, data.active],
+          "INSERT INTO users (username,name,passwordHash,role,active,employeeId,keycloakSubject) VALUES (?,?,?,?,?,?,?)",
+          [
+            data.username,
+            data.name,
+            hash,
+            data.role,
+            data.active,
+            data.employeeId || null,
+            data.keycloakSubject || null,
+          ],
         );
         await audit(c, "User created", "user", r.insertId, {
           actorId: req.user.id,
@@ -288,6 +350,13 @@ export function registerAuth({ app, wrap, query, transaction, audit }) {
         );
         const old = rows[0];
         if (!old) throw fail("User not found.", 404);
+        data.employeeId =
+          data.employeeId === undefined ? old.employeeId : data.employeeId;
+        data.keycloakSubject =
+          data.keycloakSubject === undefined
+            ? old.keycloakSubject
+            : data.keycloakSubject;
+        await checkEmployee(c, data);
         if (id === req.user.id && (!data.active || data.role !== "Admin"))
           throw fail("You cannot deactivate or demote your own account.");
         if (
@@ -302,10 +371,24 @@ export function registerAuth({ app, wrap, query, transaction, audit }) {
             throw fail("At least one active administrator is required.");
         }
         await c.execute(
-          "UPDATE users SET name=?,role=?,active=?,passwordHash=? WHERE id=?",
-          [data.name, data.role, data.active, hash || old.passwordHash, id],
+          "UPDATE users SET name=?,role=?,active=?,passwordHash=?,employeeId=?,keycloakSubject=? WHERE id=?",
+          [
+            data.name,
+            data.role,
+            data.active,
+            hash || old.passwordHash,
+            data.employeeId || null,
+            data.keycloakSubject || null,
+            id,
+          ],
         );
-        if (hash || !data.active || data.role !== old.role)
+        if (
+          hash ||
+          !data.active ||
+          data.role !== old.role ||
+          data.employeeId !== old.employeeId ||
+          data.keycloakSubject !== old.keycloakSubject
+        )
           await c.execute(
             "UPDATE sessions SET expiresAt=NOW() WHERE userId=?",
             [id],

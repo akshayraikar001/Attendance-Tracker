@@ -1,7 +1,17 @@
-import React from "react";
-import { ChevronRight, Sun, Moon, ChevronDown, LogOut } from "lucide-react";
+import React, { useEffect, useState } from "react";
+import api from "../services/api.js";
+import {
+  ChevronRight,
+  Sun,
+  Moon,
+  ChevronDown,
+  LogOut,
+  Menu,
+} from "lucide-react";
 
 export default function Topbar({
+  mobileMenuOpen,
+  onOpenMenu,
   page,
   theme,
   setTheme,
@@ -10,12 +20,70 @@ export default function Topbar({
   onLogout,
   setToast,
 }) {
+  const [whatsapp, setWhatsapp] = useState(null);
+  useEffect(() => {
+    if (user.role !== "Admin") return;
+    let alive = true,
+      pending = false;
+    async function refresh() {
+      if (pending) return;
+      pending = true;
+      try {
+        const status = await api("/whatsapp/status");
+        if (alive) setWhatsapp(status);
+      } catch {
+        if (alive) setWhatsapp({ connected: false, available: false });
+      } finally {
+        pending = false;
+      }
+    }
+    refresh();
+    const timer = setInterval(refresh, 15000);
+    return () => {
+      alive = false;
+      clearInterval(timer);
+    };
+  }, [user.role]);
   return (
     <header className="topbar">
+      <button
+        className="button mobile-nav-toggle"
+        aria-label="Open navigation"
+        aria-controls="workspace-sidebar"
+        aria-expanded={mobileMenuOpen}
+        onClick={onOpenMenu}
+      >
+        <Menu size={20} />
+      </button>
       <div className="breadcrumb">
-        Workspace <ChevronRight size={14} />
+        <span className="breadcrumb-root">Workspace</span>{" "}
+        <ChevronRight className="breadcrumb-root" size={14} />
         <span>{page}</span>
       </div>
+      {user.role === "Admin" && (
+        <span className="navbar-whatsapp-status" role="status">
+          <span
+            aria-hidden="true"
+            style={{
+              color: whatsapp?.connected
+                ? "#16a34a"
+                : whatsapp
+                  ? "#dc2626"
+                  : "#818682",
+            }}
+          >
+            ●
+          </span>
+          Sync: WhatsApp{" "}
+          {whatsapp === null
+            ? "checking…"
+            : whatsapp.available === false
+              ? "unavailable"
+              : whatsapp.connected
+                ? "connected"
+                : "disconnected"}
+        </span>
+      )}
       <div className="topbar-right">
         <button
           className="button theme-toggle"
@@ -30,7 +98,6 @@ export default function Topbar({
           {theme === "dark" ? <Sun size={17} /> : <Moon size={17} />}
           <span>{theme === "dark" ? "Light mode" : "Dark mode"}</span>
         </button>
-        <span className="live-dot" /> Your people, in sync{" "}
         <span className="divider" />
         <details className="account-menu">
           <summary>

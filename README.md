@@ -74,10 +74,12 @@ Open **http://localhost:5173**. The backend runs on port **3001**. Keep the term
 
 1. Choose **Create account**.
 2. Enter your name, email, password and password confirmation. Passwords must have at least 10 characters.
-3. The first account becomes **Admin**. Later signups become **Staff**; an administrator manages users under **User management**.
+3. The first account becomes **Admin**. All later accounts are created by an administrator under **User management**. Select **Employee** and link an employee record for a read-only personal panel.
 4. Add employees, departments and their phone numbers. Configure timings under **Settings**.
 
 There is no default application password or Gmail verification step. Existing installations should sign in with their saved account. Use **Account → Sign out** to log out.
+
+Employee access, Keycloak configuration, and the admin **Time away** log are documented in [Employee access](docs/EMPLOYEE_ACCESS.md).
 
 ## 5. Connect WhatsApp through Chatery
 
@@ -139,10 +141,10 @@ The phone pairing is stored in Chatery's `sessions/` directory, not in the Dayli
 
 ## Everyday use
 
-- **Attendance:** add/edit In time and Out time, clear saved times, use a direct status, bulk-mark absent or preview/reset a selected date range.
+- **Attendance:** add/edit In time and Out time, clear saved times, use a direct status, bulk-mark Present, Absent, Half day or Attended or preview/reset a selected date range.
 - **Calendar:** see daily counts and absentee names; use the three dots for a preview.
 - **Settings:** workspace, department and employee timings, recurring weekday shifts, time display and attendance timezone. One-hour break deduction is off by default.
-- **Automatic Out time:** when enabled, after 8 PM an eligible entry with In time but no Out time receives 7:05 PM and a note. Existing Out times and overnight shifts are preserved. The backend must run; eligible overdue entries are checked on startup.
+- **Automatic Out time:** when enabled, after the configured cutoff (default 8 PM), an eligible entry with In time but no Out time receives the configured time (default 7:05 PM) and a note. Existing Out times and overnight shifts are preserved. The backend must run; eligible overdue entries are checked on startup when catch-up is enabled.
 - **Reports:** daily, monthly, single-day attendance details, employee summaries and Excel export. Activity log shows readable changes and filters within the latest 500 events.
 - **Leave Approval:** review leave/half-day requests and manually approve or reject. Existing attendance requires explicit overwrite.
 
@@ -206,3 +208,29 @@ npm run build
 ```
 
 Database integration tests have separate local prerequisites described in the development guide. Never commit `.env`, database backups or Chatery session credentials.
+
+Location check-ins for field employees: see [Location tracking setup](docs/LOCATION_TRACKING.md).
+
+## Attendance updates
+
+- **Leave dates:** “today”, “tomorrow”/“tommorw”, “today and tomorrow” and consecutive lists like “15,16” suggest both From/To dates. Relative dates use the original message timestamp in the selected timezone. Old pending requests with missing dates are rechecked when listed; approved/rejected requests are unchanged. Separate dates like “15,18” still need review rather than marking the days between them.
+- **Bulk attendance:** select employees, dates and a status (Present, Absent, Half day or Attended), preview, then apply. Changing the status invalidates the preview. Existing records and holidays are skipped by default. This records direct statuses, without inventing In/Out times or worked hours. Reset attendance remains available separately.
+- **Monthly Daily working avg:** total recorded hours divided by Present + Half-day count. Absent days are not in the divisor. For example, 36 hours over 4 Present days and 1 Half day gives 7h 12m. No qualifying days displays a dash (blank in Excel); direct statuses contribute no measured hours.
+- **Automatic absence:** Settings → Timings → Whole workspace → Automatically mark absent after day end. Off by default. Once enabled, completed local days are checked every minute and on startup. Active employees with no attendance are marked Absent with a short note; holidays, existing entries and dates before activation are skipped. Overnight shifts wait until their end time. Long offline catch-up runs in batches of up to 31 days. Re-enabling starts from that day, without filling the disabled period.
+- **Late WhatsApp imports:** an untouched automatic absence can be replaced by a valid In message according to the existing auto-approval/manual approval settings. A manually changed absence still requires explicit overwrite.
+
+After updating, run `npm run db:setup` and restart the backend. The new `auto_absences` table stores processing/ownership markers so clearing an automatic absence does not recreate it on the next check. No existing attendance is deleted by setup.
+
+### Message history and automatic Out time
+
+Run `npm run db:setup` after updating to add the message-history column. Clear messages now hides them in cleared history without deleting duplicate protection or attendance. Use **Show cleared history** in WhatsApp to view them.
+
+Automatic WhatsApp approval/overwrite only changes today and yesterday in the configured group timezone. For example, on Thursday it can change Wednesday and Thursday, but Tuesday needs manual approval. Existing sync frequency and message limits still apply.
+
+In **Settings → Timings**, configure automatic Out time: enable/disable, **Check after** (default 8 PM), **Save Out time as** (default 7:05 PM), and whether to catch up missed checks after reopening (default on). The saved time must not be later than the cutoff. Only records with an earlier In time and missing Out time qualify; overnight shifts are excluded. Checks require the server to be running and use the attendance timezone.
+
+### Daily WhatsApp controls and preserved attendance times
+
+Changing an employee's direct status keeps saved In/Out times visible in attendance and reports. Existing measured hours are retained; no hours are invented when times are missing. Bulk status changes and approved leave follow the same rule. Use the explicit Clear buttons in the attendance editor to remove times, or Reset attendance to remove an entry.
+
+WhatsApp messages are grouped by full date in the selected group timezone. Today is expanded by default; older dates are collapsed. Use **Sync today**, choose a **Sync date**, **Sync all history**, or select day checkboxes for bulk sync/clear. Clearing archives messages and preserves attendance and duplicate protection. Open a day and choose **Load more messages** to view additional pages. The top navigation shows WhatsApp connection status, refreshed every 15 seconds. The WhatsApp panel shows Connection/Import and any remaining batch progress. Day-specific sync respects existing approval settings and the today/yesterday auto-approval window; older messages require manual approval. Large jobs continue in batches, and a new selection waits until the current job finishes.

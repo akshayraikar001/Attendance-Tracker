@@ -30,7 +30,7 @@ The workspace still owns coordinated editing state so selecting an employee/date
 | `server/src/database/setup.js` | Creates/upgrades tables and optionally seeds fictional data. |
 | `server/src/database/transactions.js` | Transaction boundaries and audit writes. |
 | `server/src/controllers/auth.js` | Account creation, sessions, permissions and account endpoints. |
-| `server/src/controllers/admin.js` | Catalog administration, bulk absence and guarded attendance reset. |
+| `server/src/controllers/admin.js` | Catalog administration, bulk attendance statuses and guarded attendance reset. |
 | `server/src/controllers/workspace.js` | Employees, holidays, settings, attendance and activity endpoints. |
 | `server/src/controllers/whatsapp.js` | Device/group/settings, history and attendance approval endpoints. |
 | `server/src/controllers/leave.js` | Leave review, manual approval/rejection and conflict handling. |
@@ -56,6 +56,8 @@ Manual leave approval → conflict check → attendance + activity log
 ```
 
 Automatic and manual sync share the same device, group, parser and deduplication rules. Leave collection never auto-approves. Application startup remains `server/src/index.js`; existing npm entry commands remain valid.
+
+`server/src/services/auto-absence.js` checks completed local days and records only missing attendance, with activation/catch-up boundaries and ownership markers. `pages/attendance/BulkAttendance.jsx` handles status selection and guarded bulk preview/apply; the old bulk-absence API remains an Absent-only compatibility route.
 
 ## Shared code and tests
 

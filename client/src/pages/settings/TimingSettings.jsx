@@ -16,6 +16,10 @@ const base = (r) => ({
   breakDeductionEnabled: r.breakDeductionEnabled ?? false,
   weekdayShifts: r.weekdayShifts || {},
   autoClockOutEnabled: r.autoClockOutEnabled ?? true,
+  autoClockOutCutoff: r.autoClockOutCutoff ?? "20:00",
+  autoClockOutTime: r.autoClockOutTime ?? "19:05",
+  autoClockOutCatchUp: r.autoClockOutCatchUp ?? true,
+  autoAbsentEnabled: r.autoAbsentEnabled ?? false,
   attendanceTimeZone: r.attendanceTimeZone || "Asia/Kolkata",
 });
 export function effectiveRules(rules, employee, date) {
@@ -158,13 +162,51 @@ export default function TimingSettings({
                     })
                   }
                 />
-                Automatic Out time at 8 PM
+                Automatic Out time
               </label>
               <p className="muted">
-                If In time exists and Out time is missing at 8 PM, save 7:05 PM
-                with a note. Overnight shifts and In times at or after 7:05 PM
-                are excluded. Requires the server to run; missed checks catch up
-                on reopening. A cleared automatic time is not added again.
+                When In time exists and Out time is missing, save the chosen
+                time after the cutoff. Example: check after 8 PM and save 7:05
+                PM. Overnight shifts and In times at or after the saved time are
+                excluded. A cleared automatic time is not added again.
+              </p>
+              <div className="form-grid">
+                <label>
+                  Check after
+                  <TimeInput
+                    value={draft.autoClockOutCutoff}
+                    onChange={(e) =>
+                      setDraft({ ...draft, autoClockOutCutoff: e.target.value })
+                    }
+                  />
+                </label>
+                <label>
+                  Save Out time as
+                  <TimeInput
+                    value={draft.autoClockOutTime}
+                    onChange={(e) =>
+                      setDraft({ ...draft, autoClockOutTime: e.target.value })
+                    }
+                  />
+                </label>
+              </div>
+              <label className="checkbox">
+                <input
+                  type="checkbox"
+                  checked={draft.autoClockOutCatchUp}
+                  onChange={(e) =>
+                    setDraft({
+                      ...draft,
+                      autoClockOutCatchUp: e.target.checked,
+                    })
+                  }
+                />
+                Catch up missed automatic Out times after reopening
+              </label>
+              <p className="muted">
+                When off, only today's missing Out times are filled. The server
+                must be running to perform checks. Times use the attendance
+                timezone below.
               </p>
               <label>
                 Attendance timezone
@@ -177,6 +219,23 @@ export default function TimingSettings({
                   placeholder="Asia/Kolkata"
                 />
               </label>
+              <label className="checkbox">
+                <input
+                  type="checkbox"
+                  checked={draft.autoAbsentEnabled}
+                  onChange={(e) =>
+                    setDraft({ ...draft, autoAbsentEnabled: e.target.checked })
+                  }
+                />
+                Automatically mark absent after day end
+              </label>
+              <p className="muted">
+                Off by default. After midnight in the attendance timezone, mark
+                active employees Absent only when no attendance exists. Holidays
+                and saved statuses/times are preserved; overnight shifts wait
+                until shift end. Starts from the day enabled and catches up when
+                the server reopens.
+              </p>
             </div>
           )}
           <div className="form-grid">

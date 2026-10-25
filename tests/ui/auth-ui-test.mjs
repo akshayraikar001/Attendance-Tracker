@@ -27,6 +27,11 @@ let connectionFailures = 1;
 globalThis.fetch = async (url, options = {}) => {
   const body = options.body ? JSON.parse(options.body) : null;
   requests.push({ url, body });
+  if (url === "/api/auth/status")
+    return {
+      ok: true,
+      json: async () => ({ setupRequired: true, keycloakEnabled: true }),
+    };
   if (url === "/api/auth/me")
     return { ok: false, status: connectionFailures-- > 0 ? 503 : 401 };
   if (url === "/api/auth/register" || url === "/api/auth/login")
@@ -69,6 +74,12 @@ try {
     { timeout: 7000 },
   );
   await screen.findByRole("heading", { name: "Welcome back" });
+  assert.equal(
+    screen
+      .getByRole("link", { name: "Sign in with Keycloak" })
+      .getAttribute("href"),
+    "/api/auth/keycloak/login",
+  );
   fireEvent.click(
     screen.getByRole("button", { name: "New to Dayline? Create account" }),
   );

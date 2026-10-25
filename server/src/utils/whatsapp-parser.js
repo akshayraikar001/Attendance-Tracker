@@ -1,3 +1,4 @@
+import { withoutMentions } from "../../../shared/message-text.js";
 import { parseTime } from "../../../shared/time.js";
 export function localMessageTime(timestamp, timeZone) {
   const parts = Object.fromEntries(
@@ -19,20 +20,29 @@ export function localMessageTime(timestamp, timeZone) {
   };
 }
 export function senderIdentity(message) {
-  const sender = String(message.sender || "");
-  const senderPhone = String(message.senderPhone || "").replace(/\D/g, "");
-  if (
-    senderPhone.length >= 8 &&
-    senderPhone.length <= 15 &&
-    /@(s\.whatsapp\.net|c\.us)$/.test(sender)
-  )
-    return "phone:" + senderPhone;
-  // A WhatsApp LID is not a phone number; retain it as a distinct identity.
-  if (/^\d+(?::\d+)?@(s.whatsapp.net|c.us)$/.test(sender))
-    return "phone:" + sender.split("@")[0].split(":")[0];
-  return sender.endsWith("@lid") ? "lid:" + sender.split("@")[0] : null;
+  // Only author fields can identify an employee; never use a group address,
+  // a quoted author, or a bare numeric LID as a phone number.
+  const candidates = [
+    message.sender,
+    message.key?.participant,
+    message.participant,
+    message.key?.participantAlt,
+    message.participantAlt,
+  ];
+  for (const value of candidates) {
+    const match = String(value || "").match(
+      /^(\d+)(?::\d+)?@(s\.whatsapp\.net|c\.us)$/,
+    );
+    if (match) return "phone:" + match[1];
+  }
+  for (const value of candidates) {
+    const match = String(value || "").match(/^(\d+)(?::\d+)?@lid$/);
+    if (match) return "lid:" + match[1];
+  }
+  return null;
 }
 export function parseAttendanceMessage(text, timestamp, timeZone) {
+  text = withoutMentions(text);
   if (!/^(?:(?:clock|check)[ -]?)?(?:in|out)(?:\s*time)?\b/i.test(text.trim()))
     return null;
   const match = text
@@ -42,7 +52,10 @@ export function parseAttendanceMessage(text, timestamp, timeZone) {
     );
   const base = localMessageTime(timestamp, timeZone);
   if (!match) return { reason: "Unrecognized attendance message" };
-  const explicit = match[2].replace(/(\d)\.(\d{2})/, "$1:$2");
+  // Normalize the complete clock value only; keep unrelated text for review.
+  const explicit = match[2]
+    .replace(/^(\d{1,2})(\s*(?:am|pm)?)$/i, "$1:00$2")
+    .replace(/^(\d{1,2})\s*[.:]\s*(\d{2})(\s*(?:am|pm)?)$/i, "$1:$2$3");
   if (explicit && !/^\d{1,2}:\d{2}\s*(?:am|pm)?$/i.test(explicit))
     return {
       reason: "Use IN / OUT, or a time such as IN 10:50 or OUT 6:55.",

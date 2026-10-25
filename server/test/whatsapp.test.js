@@ -115,6 +115,56 @@ test("Joined In/Out time labels accept case and spacing variations without match
   ])
     assert.equal(parseAttendanceMessage(text, at, "Asia/Kolkata"), null, text);
 });
+test("IN and OUT accept spaced dots/colons and mixed case without weakening validation", () => {
+  for (const [label, action] of [
+    ["In time", "in"],
+    ["iN TiMe", "in"],
+    ["INTIME:", "in"],
+    ["Out time", "out"],
+    ["oUt TiMe", "out"],
+    ["OUTTIME =", "out"],
+  ]) {
+    for (const separator of [".", ". ", " .", " . ", " : ", ".\t"]) {
+      for (const [hour, minute, suffix, expected] of [
+        ["9", "40", "", "09:40"],
+        ["10", "25", "", "10:25"],
+        ["6", "55", "", "18:55"],
+        ["2", "05", "", "14:05"],
+        ["09", "40", " aM", "09:40"],
+        ["6", "55", "pM", "18:55"],
+      ]) {
+        const text = `  ${label}  ${hour}${separator}${minute}${suffix}  `;
+        assert.deepEqual(
+          parseAttendanceMessage(text, at, "Asia/Kolkata"),
+          {
+            action,
+            date: "2026-10-05",
+            time: expected,
+          },
+          text,
+        );
+      }
+    }
+    for (const clock of [
+      "9. 60",
+      "10 . 99",
+      "25. 00",
+      "8. 01",
+      "9..40",
+      "9.4",
+      "9. 40 later",
+      "9. 40 10.25",
+    ]) {
+      const result = parseAttendanceMessage(
+        `${label} ${clock}`,
+        at,
+        "Asia/Kolkata",
+      );
+      assert.ok(result.reason, `${label} ${clock}`);
+      assert.equal(result.time, undefined);
+    }
+  }
+});
 test("Phone identities normalize device suffixes; LIDs remain distinct", () => {
   assert.equal(
     senderIdentity({ sender: "919999999999:3@s.whatsapp.net" }),
@@ -129,4 +179,77 @@ test("Phone identities normalize device suffixes; LIDs remain distinct", () => {
     "lid:123456",
   );
   assert.equal(senderIdentity({ sender: "123@g.us" }), null);
+});
+
+test("History participants recover missing senders without interpreting groups or LIDs as phones", () => {
+  assert.equal(
+    senderIdentity({
+      sender: "123@g.us",
+      participant: "919000000001@s.whatsapp.net",
+    }),
+    "phone:919000000001",
+  );
+  assert.equal(
+    senderIdentity({ sender: "123@g.us", participant: "180281420083257@lid" }),
+    "lid:180281420083257",
+  );
+  assert.equal(
+    senderIdentity({
+      key: { participant: "919000000001:3@s.whatsapp.net" },
+      senderPhone: "9190000000013",
+    }),
+    "phone:919000000001",
+  );
+  assert.equal(
+    senderIdentity({
+      sender: "123:4@lid",
+      participantAlt: "919000000001@s.whatsapp.net",
+    }),
+    "phone:919000000001",
+  );
+  assert.equal(senderIdentity({ sender: "123:4@lid" }), "lid:123");
+  for (const sender of [
+    "unresolved",
+    "solved@lid",
+    "123@g.us",
+    "123@sXwhatsappYnet",
+  ])
+    assert.equal(senderIdentity({ sender, senderPhone: "919000000001" }), null);
+});
+
+test("hour-only IN/OUT and mentions retain office-time interpretation", () => {
+  for (const [text, time] of [
+    ["In time 10", "10:00"],
+    ["OUT TIME 7", "19:00"],
+    ["IN 9 am", "09:00"],
+    ["OUT 8PM", "20:00"],
+    ["@919999999999 In time 10 @all", "10:00"],
+    ["@Bharat: out time 6", "18:00"],
+  ])
+    assert.equal(
+      parseAttendanceMessage(text, at, "Asia/Kolkata").time,
+      time,
+      text,
+    );
+  for (const text of [
+    "IN 25",
+    "OUT 21",
+    "IN 9.4",
+    "IN 10 people",
+    "IN 10 or 11",
+  ])
+    assert.ok(parseAttendanceMessage(text, at, "UTC").reason, text);
+});
+
+test("mention display removes address tokens without changing email or ordinary words", async () => {
+  const { withoutMentions } = await import("../../shared/message-text.js");
+  assert.equal(
+    withoutMentions("@919999999999 @Bharat Leave Friday and Saturday"),
+    "Leave Friday and Saturday",
+  );
+  assert.equal(
+    withoutMentions("Email staff@example.com about leave"),
+    "Email staff@example.com about leave",
+  );
+  assert.equal(withoutMentions("@123456789012345@lid IN 10"), "IN 10");
 });

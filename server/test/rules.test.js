@@ -336,3 +336,26 @@ test("weekday shifts resolve for the attendance date with employee, group and wo
     false,
   );
 });
+
+test("direct status preserves measured hours without replacing the chosen status", () => {
+  const timed = {
+    mode: "time",
+    inTime: "10:00",
+    outTime: "18:00",
+    overnight: false,
+  };
+  const measured = calculate(timed, defaults);
+  const direct = calculate(
+    { ...timed, mode: "manual", status: "Half day" },
+    defaults,
+  );
+  assert.equal(direct.status, "Half day");
+  assert.equal(direct.workedMinutes, measured.workedMinutes);
+  assert.equal(
+    calculate(
+      { ...timed, mode: "manual", status: "Absent", inTime: null },
+      defaults,
+    ).workedMinutes,
+    null,
+  );
+});

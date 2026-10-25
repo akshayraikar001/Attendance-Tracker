@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { leaveDates } from "../utils/leave-parser.js";
+import { leaveDates, parseLeaveMessage } from "../utils/leave-parser.js";
 import { resolveRules } from "../services/rules.js";
 const parse = (value) =>
   typeof value === "string" ? JSON.parse(value) : value;
@@ -58,7 +58,27 @@ export function registerLeave({
         messagesPerSync: cfg.messagesPerSync,
         syncIntervalMinutes: cfg.syncIntervalMinutes,
         syncProgress: cfg.syncProgress || null,
-        requests: rows,
+        requests: rows.map((request) => {
+          // Old pending messages may predate improvements to the date parser.
+          // Supply suggestions without modifying decided requests or saved dates.
+          if (
+            request.state !== "pending" ||
+            (request.fromDate && request.toDate)
+          )
+            return request;
+          const suggested = parseLeaveMessage(
+            request.text,
+            Number(request.timestamp),
+            cfg.timeZone || "UTC",
+          );
+          if (!suggested?.from || !suggested.to) return request;
+          return {
+            ...request,
+            fromDate: request.fromDate || suggested.from,
+            toDate: request.toDate || suggested.to,
+            reason: suggested.reason,
+          };
+        }),
         total: Number(count.total),
         hasMore: offset + rows.length < Number(count.total),
         ...whatsapp.status,
@@ -180,7 +200,7 @@ export function registerLeave({
             date,
           );
           await c.execute(
-            `INSERT INTO attendance (employeeId,date,mode,inTime,outTime,overnight,status,workedMinutes,lateMinutes,earlyMinutes,overtimeMinutes,notes,rules) VALUES (?,?,'manual',NULL,NULL,0,?,NULL,NULL,NULL,NULL,?,?) ON DUPLICATE KEY UPDATE mode='manual',inTime=NULL,outTime=NULL,overnight=0,status=VALUES(status),workedMinutes=NULL,lateMinutes=NULL,earlyMinutes=NULL,overtimeMinutes=NULL,notes=VALUES(notes),rules=VALUES(rules)`,
+            `INSERT INTO attendance (employeeId,date,mode,inTime,outTime,overnight,status,workedMinutes,lateMinutes,earlyMinutes,overtimeMinutes,notes,rules) VALUES (?,?,'manual',NULL,NULL,0,?,NULL,NULL,NULL,NULL,?,?) ON DUPLICATE KEY UPDATE mode='manual',status=VALUES(status),notes=VALUES(notes),rules=VALUES(rules)`,
             [
               data.employeeId,
               date,

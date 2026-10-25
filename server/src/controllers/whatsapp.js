@@ -1,3 +1,4 @@
+import { localMessageTime } from "../utils/whatsapp-parser.js";
 import { z } from "zod";
 import { saveEmployeePhone } from "../services/employee-phone.js";
 import { chateryRequest, ensureChatery } from "../integrations/chatery.js";
@@ -10,12 +11,74 @@ const parse = (value) =>
   typeof value === "string" ? JSON.parse(value) : value;
 const fail = (message, status = 400) =>
   Object.assign(new Error(message), { status });
+const dateSchema = z
+  .string()
+  .regex(/^\d{4}-\d{2}-\d{2}$/)
+  .refine(
+    (value) =>
+      !Number.isNaN(Date.parse(value)) &&
+      new Date(value).toISOString().slice(0, 10) === value,
+    "Invalid date",
+  );
+const selectionSchema = z.object({
+  dates: z.array(dateSchema).min(1).max(366).optional(),
+  all: z.boolean().optional(),
+});
+function dayBounds(date, zone) {
+  const midnight = Date.parse(date + "T00:00:00Z") / 1000;
+  const boundary = (target) => {
+    let low = midnight - 36 * 3600,
+      high = midnight + 60 * 3600;
+    while (low < high) {
+      const mid = Math.floor((low + high) / 2);
+      if (localMessageTime(mid, zone).date < target) low = mid + 1;
+      else high = mid;
+    }
+    return low;
+  };
+  return [
+    boundary(date),
+    boundary(new Date((midnight + 86400) * 1000).toISOString().slice(0, 10)),
+  ];
+}
+function dayFilter(dates, zone) {
+  if (!dates?.length) return { sql: "", args: [] };
+  return {
+    sql:
+      " AND (" +
+      dates.map(() => "(timestamp>=? AND timestamp<?)").join(" OR ") +
+      ")",
+    args: dates.flatMap((date) => dayBounds(date, zone)),
+  };
+}
 export function registerWhatsApp({ app, wrap, query, transaction, audit }) {
   const service = createWhatsAppService({ query, transaction, audit });
   app.use("/api/whatsapp", (req, res, next) =>
     req.user.role === "Admin"
       ? next()
       : res.status(403).json({ error: "Administrator access required." }),
+  );
+  app.get(
+    "/api/whatsapp/status",
+    wrap(async (req, res) => {
+      const [row] = await query(
+        "SELECT config FROM whatsapp_config WHERE id=1",
+      );
+      const cfg = parse(row.config);
+      try {
+        const connection = await chateryRequest(
+          `/sessions/${encodeURIComponent(cfg.sessionId)}/status`,
+          null,
+          { missingOK: true },
+        );
+        res.json({
+          connected: Boolean(connection?.isConnected),
+          available: true,
+        });
+      } catch {
+        res.json({ connected: false, available: false });
+      }
+    }),
   );
   app.get(
     "/api/whatsapp",
@@ -50,10 +113,26 @@ export function registerWhatsApp({ app, wrap, query, transaction, audit }) {
         connectionError = e.message;
       }
       const events = await query(
-        "SELECT * FROM whatsapp_events WHERE groupId=? ORDER BY timestamp DESC LIMIT 100",
-        [cfg.groupId],
+        `SELECT * FROM whatsapp_events WHERE sessionId=? AND groupId=? AND clearedAt IS ${req.query.history === "archived" ? "NOT NULL" : "NULL"} ORDER BY timestamp DESC LIMIT 100`,
+        [cfg.sessionId, cfg.groupId],
       );
+      const timestamps = await query(
+        `SELECT timestamp,COUNT(*) AS count FROM whatsapp_events WHERE sessionId=? AND groupId=? AND clearedAt IS ${req.query.history === "archived" ? "NOT NULL" : "NULL"} GROUP BY timestamp`,
+        [cfg.sessionId, cfg.groupId],
+      );
+      const days = new Map();
+      for (const row of timestamps) {
+        const date = localMessageTime(
+          Number(row.timestamp),
+          cfg.timeZone || "UTC",
+        ).date;
+        days.set(date, (days.get(date) || 0) + Number(row.count));
+      }
       res.json({
+        days: [...days]
+          .sort(([a], [b]) => b.localeCompare(a))
+          .map(([date, count]) => ({ date, count })),
+        syncing: Boolean(cfg.syncProgress || service.status.syncing),
         config: cfg,
         connection,
         qrCode,
@@ -64,6 +143,25 @@ export function registerWhatsApp({ app, wrap, query, transaction, audit }) {
           "SELECT l.*,e.name FROM whatsapp_links l JOIN employees e ON e.id=l.employeeId",
         ),
       });
+    }),
+  );
+  app.get(
+    "/api/whatsapp/messages",
+    wrap(async (req, res) => {
+      const date = dateSchema.parse(req.query.date);
+      const offset = z.coerce
+        .number()
+        .int()
+        .min(0)
+        .max(1000000)
+        .parse(req.query.offset || 0);
+      const cfg = await service.config();
+      const filter = dayFilter([date], cfg.timeZone || "UTC");
+      const rows = await query(
+        `SELECT * FROM whatsapp_events WHERE sessionId=? AND groupId=? AND clearedAt IS ${req.query.history === "archived" ? "NOT NULL" : "NULL"}${filter.sql} ORDER BY timestamp DESC,id LIMIT 101 OFFSET ?`,
+        [cfg.sessionId, cfg.groupId, ...filter.args, offset],
+      );
+      res.json({ events: rows.slice(0, 100), hasMore: rows.length > 100 });
     }),
   );
   app.post(
@@ -114,8 +212,19 @@ export function registerWhatsApp({ app, wrap, query, transaction, audit }) {
   app.delete(
     "/api/whatsapp/events",
     wrap(async (req, res) => {
-      const cfg = await service.config();
-      await query("DELETE FROM whatsapp_events WHERE groupId=?", [cfg.groupId]);
+      const selection = selectionSchema.parse(req.body || {});
+      await transaction(async (c) => {
+        const [rows] = await c.execute(
+          "SELECT config FROM whatsapp_config WHERE id=1 FOR UPDATE",
+        );
+        const cfg = parse(rows[0].config);
+        const filter = dayFilter(selection.dates, cfg.timeZone || "UTC");
+        await c.execute(
+          "UPDATE whatsapp_events SET clearedAt=UTC_TIMESTAMP() WHERE sessionId=? AND groupId=? AND clearedAt IS NULL" +
+            filter.sql,
+          [cfg.sessionId, cfg.groupId, ...filter.args],
+        );
+      });
       res.json({ ok: true });
     }),
   );
@@ -236,34 +345,7 @@ export function registerWhatsApp({ app, wrap, query, transaction, audit }) {
           overwrite: z.boolean().optional(),
         })
         .parse(req.body);
-      const [row] = await query("SELECT * FROM whatsapp_events WHERE id=?", [
-        id,
-      ]);
-      if (!row) throw fail("Message not found.", 404);
-      const sender = row.senderId.startsWith("phone:")
-        ? row.senderId.slice(6) + "@s.whatsapp.net"
-        : row.senderId.slice(4) + "@lid";
-      const result = await service.ingest(
-        {
-          id: row.messageId,
-          chatId: row.groupId,
-          isGroup: true,
-          type: "text",
-          content: row.text,
-          timestamp: row.timestamp,
-          sender,
-          senderName: row.senderName,
-        },
-        row.sessionId,
-        true,
-        overwrite,
-      );
-      res.json(
-        result || {
-          state: row.state,
-          reason: "Enable this group to retry its messages.",
-        },
-      );
+      res.json(await service.retryEvent(id, overwrite));
     }),
   );
   app.post(
@@ -275,41 +357,52 @@ export function registerWhatsApp({ app, wrap, query, transaction, audit }) {
           overwrite: z.boolean().optional(),
         })
         .parse(req.body);
-      const [row] = await query("SELECT * FROM whatsapp_events WHERE id=?", [
-        id,
-      ]);
-      if (!row) throw fail("Message not found.", 404);
-      const sender = row.senderId.startsWith("phone:")
-        ? row.senderId.slice(6) + "@s.whatsapp.net"
-        : row.senderId.slice(4) + "@lid";
-      const result = await service.ingest(
-        {
-          id: row.messageId,
-          chatId: row.groupId,
-          isGroup: true,
-          type: "text",
-          content: row.text,
-          timestamp: row.timestamp,
-          sender,
-          senderName: row.senderName,
-        },
-        row.sessionId,
-        true,
-        overwrite,
-      );
-      res.json(
-        result || {
-          state: row.state,
-          reason: "Message is not ready to approve.",
-        },
-      );
+      res.json(await service.retryEvent(id, overwrite));
     }),
   );
   app.post(
     "/api/whatsapp/sync",
     wrap(async (req, res) => {
+      const selection = selectionSchema.parse(req.body || {});
+      if (selection.all || selection.dates) {
+        await transaction(async (c) => {
+          await c.execute("SELECT id FROM settings WHERE id=1 FOR UPDATE");
+          const [rows] = await c.execute(
+            "SELECT config FROM whatsapp_config WHERE id=1",
+          );
+          const cfg = parse(rows[0].config);
+          if (cfg.syncProgress || service.status.syncing)
+            throw fail(
+              "A sync is already running. Finish it before starting another selection.",
+              409,
+            );
+          if (!cfg.enabled && !cfg.leaveEnabled)
+            throw fail("Enable importing before syncing.");
+          const dates = selection.dates
+            ? [...new Set(selection.dates)].sort()
+            : null;
+          cfg.revision = Math.max(Date.now(), (cfg.revision || 0) + 1);
+          cfg.syncProgress = {
+            phase: "fetch",
+            cursor: null,
+            scanned: 0,
+            startedAt: Math.floor(Date.now() / 1000),
+            fullScan: !dates,
+            dates,
+            cutoff: dates
+              ? Math.max(cfg.since || 0, dayBounds(dates[0], cfg.timeZone)[0])
+              : cfg.since || 0,
+          };
+          await c.execute("UPDATE whatsapp_config SET config=? WHERE id=1", [
+            JSON.stringify(cfg),
+          ]);
+        });
+      }
       await service.poll();
-      res.json(service.status);
+      res.json({
+        ...service.status,
+        progress: (await service.config()).syncProgress,
+      });
     }),
   );
   return service;

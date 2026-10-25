@@ -1,3 +1,5 @@
+import LocationTracking from "../pages/locations/LocationTracking.jsx";
+import TimeAway from "../pages/attendance/TimeAway.jsx";
 import useTheme from "../hooks/useTheme.js";
 import { today, fmt, shortDate, initials } from "../utils/display.js";
 import { defaultRules } from "../constants/attendance.js";
@@ -19,7 +21,7 @@ import {
 } from "../components/common/TimeDisplay.jsx";
 import { formatTime } from "../../../shared/time.js";
 import WorkspaceSettings from "../pages/settings/WorkspaceSettings.jsx";
-import BulkAbsence from "../pages/attendance/BulkAbsence.jsx";
+import BulkAttendance from "../pages/attendance/BulkAttendance.jsx";
 import MonthlyReport from "../pages/reports/MonthlyReport.jsx";
 import DateNavigator, {
   RangeNavigator,
@@ -84,6 +86,7 @@ export default function WorkspaceLayout({
     [to, setTo] = useState(initialDate),
     [reportTab, setReportTab] = useState("Daily report");
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const reportTabLabel = (tab) => {
     if (tab === "Daily report") {
       const d = new Date(date + "T12:00:00");
@@ -133,6 +136,7 @@ export default function WorkspaceLayout({
     }
   }, [toast]);
   const navigate = (p) => {
+    setMobileMenuOpen(false);
     setPage(p);
     setSearch("");
     setFilter("All statuses");
@@ -235,6 +239,7 @@ export default function WorkspaceLayout({
       : initialDate;
     setModal({
       type: "attendance",
+      timeTouched: false,
       data: {
         employeeId: numericEmployeeId || active[0]?.id || "",
         date: safeDate,
@@ -242,7 +247,9 @@ export default function WorkspaceLayout({
         inTime:
           typeof existing?.inTime === "string"
             ? existing.inTime
-            : timing.shiftStart,
+            : existing
+              ? ""
+              : timing.shiftStart,
         outTime: typeof existing?.outTime === "string" ? existing.outTime : "",
         overnight: Boolean(existing?.overnight),
         status: ["Present", "Absent", "Half day", "Attended"].includes(
@@ -336,6 +343,7 @@ export default function WorkspaceLayout({
               <th>In time</th>
               <th>Out time</th>
               <th>Work hours</th>
+              {!reportMode && <th>Notes</th>}
               {reportMode ? (
                 <>
                   <th>Late</th>
@@ -366,6 +374,9 @@ export default function WorkspaceLayout({
                 <td className="work-hours">
                   <WorkedTime entry={row} />
                 </td>
+                {!reportMode && (
+                  <td className="attendance-note">{row.notes || "—"}</td>
+                )}
                 {reportMode ? (
                   <>
                     <td>{fmt(row.lateMinutes)}</td>
@@ -447,6 +458,8 @@ export default function WorkspaceLayout({
     <TimeFormatContext.Provider value={rules.timeFormat ?? "12h"}>
       <div className="app">
         <Sidebar
+          mobileMenuOpen={mobileMenuOpen}
+          setMobileMenuOpen={setMobileMenuOpen}
           sidebarCollapsed={sidebarCollapsed}
           setSidebarCollapsed={setSidebarCollapsed}
           user={user}
@@ -456,8 +469,10 @@ export default function WorkspaceLayout({
           onLogout={onLogout}
           setToast={setToast}
         />
-        <div className="main-shell">
+        <div className="main-shell" inert={mobileMenuOpen ? "" : undefined}>
           <Topbar
+            mobileMenuOpen={mobileMenuOpen}
+            onOpenMenu={() => setMobileMenuOpen(true)}
             page={page}
             theme={theme}
             setTheme={setTheme}
@@ -471,7 +486,7 @@ export default function WorkspaceLayout({
               <div>
                 <div className="eyebrow">YOUR WORKDAY, AT A GLANCE</div>
                 <h1>
-                  {["User management", "My account"].includes(page)
+                  {["User management", "My account", "Time away"].includes(page)
                     ? page
                     : page === "Calendar"
                       ? "Attendance calendar"
@@ -490,19 +505,21 @@ export default function WorkspaceLayout({
                                   : "Attendance register"}
                 </h1>
                 <p>
-                  {page === "Overview"
-                    ? "A clear picture of who's in, who's out, and everything in between."
-                    : page === "Employees"
-                      ? "Good teams start with great people. Keep everyone in one place."
-                      : page === "Reports"
-                        ? "Every hour accounted for. Every detail, ready when you need it."
-                        : page === "Leave Approval"
-                          ? "Review leave requests before updating attendance."
-                          : page === "WhatsApp attendance"
-                            ? "Import attendance messages from one WhatsApp group."
-                            : page === "Settings"
-                              ? "Set the rules that make sense for your team."
-                              : "Keep each workday accurate, one entry at a time."}
+                  {page === "Time away"
+                    ? "Review departures, returns, and time away for each day."
+                    : page === "Overview"
+                      ? "A clear picture of who's in, who's out, and everything in between."
+                      : page === "Employees"
+                        ? "Good teams start with great people. Keep everyone in one place."
+                        : page === "Reports"
+                          ? "Every hour accounted for. Every detail, ready when you need it."
+                          : page === "Leave Approval"
+                            ? "Review leave requests before updating attendance."
+                            : page === "WhatsApp attendance"
+                              ? "Import attendance messages from one WhatsApp group."
+                              : page === "Settings"
+                                ? "Set the rules that make sense for your team."
+                                : "Keep each workday accurate, one entry at a time."}
                 </p>
               </div>
               <div className="heading-actions">
@@ -552,9 +569,9 @@ export default function WorkspaceLayout({
                         <>
                           <button
                             className="button"
-                            onClick={() => setBulkOpen("absence")}
+                            onClick={() => setBulkOpen("attendance")}
                           >
-                            Bulk absent
+                            Bulk attendance
                           </button>
                           <button
                             className="button"
@@ -954,6 +971,12 @@ export default function WorkspaceLayout({
                 )}
               </>
             )}
+            {page === "Location tracking" && user.role === "Admin" && (
+              <LocationTracking admin />
+            )}
+            {page === "Time away" && user.role === "Admin" && (
+              <TimeAway employees={employees} />
+            )}
             {page === "User management" && user.role === "Admin" && (
               <UserManagement api={api} user={user} onLogout={onLogout} />
             )}
@@ -1292,7 +1315,7 @@ export default function WorkspaceLayout({
           </div>
         )}
         {bulkOpen && (
-          <BulkAbsence
+          <BulkAttendance
             reset={bulkOpen === "reset"}
             employees={employees}
             date={date}
@@ -1303,7 +1326,7 @@ export default function WorkspaceLayout({
               setToast(
                 bulkOpen === "reset"
                   ? `${r.total} attendance entries reset`
-                  : `${r.total} absence entries saved`,
+                  : `${r.total} attendance entries saved`,
               );
             }}
           />
@@ -1530,7 +1553,20 @@ export default function WorkspaceLayout({
                             onClick={() =>
                               setModal({
                                 ...modal,
-                                data: { ...modal.data, mode: v },
+                                data: {
+                                  ...modal.data,
+                                  mode: v,
+                                  ...(v === "manual" &&
+                                  !records.some(
+                                    (row) =>
+                                      row.employeeId ===
+                                        Number(modal.data.employeeId) &&
+                                      row.date === modal.data.date,
+                                  ) &&
+                                  !modal.timeTouched
+                                    ? { inTime: "", outTime: "" }
+                                    : {}),
+                                },
                               })
                             }
                           >
@@ -1586,6 +1622,7 @@ export default function WorkspaceLayout({
                                   onChange={(e) =>
                                     setModal({
                                       ...modal,
+                                      timeTouched: true,
                                       data: {
                                         ...modal.data,
                                         [k]: e.target.value,
@@ -1669,23 +1706,69 @@ export default function WorkspaceLayout({
                           </div>
                         </>
                       ) : (
-                        <label>
-                          Attendance status
-                          <select
-                            value={modal.data.status}
-                            onChange={(e) =>
-                              setModal({
-                                ...modal,
-                                data: { ...modal.data, status: e.target.value },
-                              })
-                            }
-                          >
-                            <option>Present</option>
-                            <option>Absent</option>
-                            <option>Half day</option>
-                            <option>Attended</option>
-                          </select>
-                        </label>
+                        <>
+                          <p className="muted">
+                            Changing status keeps saved times. Clear a time only
+                            if you want to remove it.
+                          </p>
+                          <div className="form-grid">
+                            {[
+                              ["inTime", "In time"],
+                              ["outTime", "Out time"],
+                            ].map(([key, label]) => (
+                              <div key={key} className="time-field">
+                                <label>
+                                  {label}
+                                  <TimeInput
+                                    value={modal.data[key] || ""}
+                                    onChange={(event) =>
+                                      setModal({
+                                        ...modal,
+                                        data: {
+                                          ...modal.data,
+                                          [key]: event.target.value,
+                                        },
+                                      })
+                                    }
+                                  />
+                                </label>
+                                <button
+                                  type="button"
+                                  className="clear-time"
+                                  aria-label={"Clear " + label.toLowerCase()}
+                                  onClick={() =>
+                                    setModal({
+                                      ...modal,
+                                      data: { ...modal.data, [key]: "" },
+                                    })
+                                  }
+                                >
+                                  Clear
+                                </button>
+                              </div>
+                            ))}
+                          </div>
+                          <label>
+                            Attendance status
+                            <select
+                              value={modal.data.status}
+                              onChange={(e) =>
+                                setModal({
+                                  ...modal,
+                                  data: {
+                                    ...modal.data,
+                                    status: e.target.value,
+                                  },
+                                })
+                              }
+                            >
+                              <option>Present</option>
+                              <option>Absent</option>
+                              <option>Half day</option>
+                              <option>Attended</option>
+                            </select>
+                          </label>
+                        </>
                       )}
                       <label className="notes-label">
                         Notes <span>optional</span>

@@ -130,6 +130,9 @@ export default function MonthlyReport({
               <th>A</th>
               <th>½</th>
               <th>Total hours</th>
+              <th title="Total hours ÷ (Present days + Half days)">
+                Daily working avg
+              </th>
             </tr>
           </thead>
           <tbody>
@@ -171,6 +174,11 @@ export default function MonthlyReport({
                 <td className="month-total">{person.counts.Absent}</td>
                 <td className="month-total">{person.counts["Half day"]}</td>
                 <td>{hours(person.totalMinutes)}</td>
+                <td>
+                  {person.averageMinutes == null
+                    ? "—"
+                    : hours(Math.round(person.averageMinutes))}
+                </td>
               </tr>
             ))}
           </tbody>
@@ -180,9 +188,10 @@ export default function MonthlyReport({
         )}
       </div>
       <p className="table-footer">
-        Unrecorded holidays stay neutral. Unmarked days are not automatically
-        absent. AT means attended for more than 1 minute but less than a half
-        day.
+        Daily working avg = total recorded hours ÷ (Present days + Half days).
+        Absent days are excluded from the divisor. A dash means no qualifying
+        days. Unrecorded holidays stay neutral. AT means attended for more than
+        1 minute but less than a half day.
       </p>
     </section>
   );

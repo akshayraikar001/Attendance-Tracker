@@ -207,8 +207,45 @@ try {
     (r) => r.employeeId === first.id && r.date === "2026-10-01",
   );
   assert.equal(replaced.status, "Absent");
-  assert.equal(replaced.inTime, null);
-  assert.equal(replaced.workedMinutes, null);
+  assert.equal(replaced.inTime, "10:00");
+  assert.equal(replaced.outTime, "18:00");
+  assert.equal(
+    replaced.workedMinutes,
+    before.find((r) => r.employeeId === first.id && r.date === "2026-10-01")
+      .workedMinutes,
+  );
+  await api(
+    "/attendance",
+    {
+      employeeId: first.id,
+      date: "2026-10-01",
+      mode: "manual",
+      status: "Half day",
+    },
+    "POST",
+  );
+  let preserved = (await api("/attendance")).find(
+    (r) => r.employeeId === first.id && r.date === "2026-10-01",
+  );
+  assert.equal(preserved.inTime, "10:00");
+  assert.equal(preserved.outTime, "18:00");
+  assert.equal(preserved.status, "Half day");
+  await api(
+    "/attendance",
+    {
+      employeeId: first.id,
+      date: "2026-10-01",
+      mode: "manual",
+      status: "Half day",
+      outTime: null,
+    },
+    "POST",
+  );
+  preserved = (await api("/attendance")).find(
+    (r) => r.employeeId === first.id && r.date === "2026-10-01",
+  );
+  assert.equal(preserved.inTime, "10:00");
+  assert.equal(preserved.outTime, null);
   const explicitHoliday = {
     ...payload,
     employeeIds: [second.id],
@@ -331,6 +368,73 @@ try {
   console.log(
     "PASS: reset previews without writes, requires a fresh preview, clears selected date ranges including holiday work, preserves other attendance and holidays, validates input, and skips empty dates.",
   );
+  for (const status of ["Present", "Half day", "Attended", "Absent"]) {
+    const data = {
+      employeeIds: [first.id],
+      from: "2026-10-20",
+      to: "2026-10-21",
+      status,
+      overwrite: true,
+      skipHolidays: false,
+    };
+    const preview = await api(
+      "/attendance/bulk-attendance/preview",
+      data,
+      "POST",
+    );
+    await api(
+      "/attendance/bulk-attendance",
+      {
+        ...data,
+        status: status === "Present" ? "Absent" : "Present",
+        previewToken: preview.previewToken,
+      },
+      "POST",
+      409,
+    );
+    await api(
+      "/attendance/bulk-attendance",
+      { ...data, previewToken: preview.previewToken },
+      "POST",
+    );
+    const entries = (
+      await api("/attendance?from=2026-10-20&to=2026-10-21")
+    ).filter((r) => r.employeeId === first.id);
+    assert.equal(entries.length, 2);
+    assert.ok(
+      entries.every(
+        (r) =>
+          r.status === status && r.inTime === null && r.workedMinutes === null,
+      ),
+    );
+  }
+  await api(
+    "/attendance/bulk-attendance/preview",
+    { ...payload, status: "Wrong" },
+    "POST",
+    400,
+  );
+  assert.equal((await api("/settings")).autoAbsentEnabled, false);
+  const savedRules = await api("/settings");
+  await api("/settings", {
+    ...savedRules,
+    autoAbsentEnabled: true,
+    autoAbsentSince: "2000-01-01",
+    autoAbsentThrough: "2099-01-01",
+  });
+  const activated = await api("/settings");
+  assert.ok(activated.autoAbsentSince > "2026-01-01");
+  assert.equal(activated.autoAbsentThrough, undefined);
+  await api("/settings", { ...activated, autoAbsentSince: "2000-01-01" });
+  assert.equal(
+    (await api("/settings")).autoAbsentSince,
+    activated.autoAbsentSince,
+  );
+  await api("/settings", { ...activated, autoAbsentEnabled: false });
+  assert.equal((await api("/settings")).autoAbsentSince, undefined);
+  console.log(
+    "PASS: bulk statuses, status-change preview protection, auto-absence opt-in and server-owned activation dates.",
+  );
   let catalog = await api("/catalog");
   const development = catalog.departments.find((d) => d.name === "Development");
   await api("/catalog/departments/" + development.id, {
@@ -375,7 +479,7 @@ try {
     "Sales Associate",
   );
   assert.ok(
-    (await api("/audit")).some((e) => e.action === "Bulk absence recorded"),
+    (await api("/audit")).some((e) => e.action === "Bulk attendance recorded"),
   );
   console.log(
     "PASS: bulk preview, guarded apply, stale-preview rejection, overwrite opt-in, weekly/custom holiday skipping, Sunday work, ranges, department/role renames, timing preservation and empty-item removal.",

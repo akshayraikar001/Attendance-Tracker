@@ -2,7 +2,7 @@ import React, { useState } from "react";
 import DateNavigator, {
   RangeNavigator,
 } from "../../components/common/DateNavigator.jsx";
-export default function BulkAbsence({
+export default function BulkAttendance({
   employees,
   date,
   api,
@@ -17,12 +17,13 @@ export default function BulkAbsence({
     [skipHolidays, setSkipHolidays] = useState(true),
     [overwrite, setOverwrite] = useState(false),
     [notes, setNotes] = useState(""),
+    [status, setStatus] = useState("Absent"),
     [preview, setPreview] = useState(null),
     [busy, setBusy] = useState(false),
     [error, setError] = useState(""),
     [result, setResult] = useState(null);
   const active = employees.filter((e) => reset || e.status === "Active");
-  const endpoint = `/attendance/bulk-${reset ? "reset" : "absence"}`;
+  const endpoint = `/attendance/bulk-${reset ? "reset" : "attendance"}`;
   const visible = active.filter(
     (e) => group === "All groups" || e.department === group,
   );
@@ -40,6 +41,7 @@ export default function BulkAbsence({
     skipHolidays,
     overwrite,
     notes,
+    status,
   };
   async function review(e) {
     e.preventDefault();
@@ -84,7 +86,7 @@ export default function BulkAbsence({
           <div>
             <span className="eyebrow">ONE DAY OR A DATE RANGE</span>
             <h2 id="bulk-title">
-              {reset ? "Reset attendance" : "Mark bulk absence"}
+              {reset ? "Reset attendance" : "Bulk attendance"}
             </h2>
           </div>
         </div>
@@ -180,6 +182,23 @@ export default function BulkAbsence({
             </div>
             {!reset && (
               <>
+                <label>
+                  Attendance status
+                  <select
+                    value={status}
+                    onChange={(e) => update(setStatus, e.target.value)}
+                  >
+                    {["Present", "Absent", "Half day", "Attended"].map(
+                      (value) => (
+                        <option key={value}>{value}</option>
+                      ),
+                    )}
+                  </select>
+                </label>
+                <p className="muted">
+                  Records a direct status and keeps any saved In/Out times and
+                  measured hours. No times are invented for unmarked days.
+                </p>
                 <label className="checkbox">
                   <input
                     type="checkbox"
@@ -194,13 +213,13 @@ export default function BulkAbsence({
                     checked={overwrite}
                     onChange={(e) => update(setOverwrite, e.target.checked)}
                   />
-                  Replace existing attendance with Absent
+                  Replace existing attendance with {status}
                 </label>
                 {overwrite && (
                   <p className="error-text">
-                    Replacing removes existing in/out times and measured hours
-                    for the selected entries. The previous values remain in the
-                    activity log.
+                    Changes the selected status while keeping saved In/Out times
+                    and measured hours. Use attendance editing to clear times
+                    explicitly.
                   </p>
                 )}
                 <label>
@@ -225,7 +244,7 @@ export default function BulkAbsence({
                 `Reset ${result.total} attendance entries.`
               ) : (
                 <>
-                  Saved {result.total} absence entries. Skipped{" "}
+                  Saved {result.total} {status} entries. Skipped{" "}
                   {result.skippedExisting} existing entries and{" "}
                   {result.skippedHolidays} holiday employee-days.
                 </>
@@ -257,7 +276,7 @@ export default function BulkAbsence({
                         ? "Clear " + r.replaces
                         : r.replaces
                           ? "Replace " + r.replaces
-                          : "New absence"}
+                          : "Mark " + status}
                     </span>
                   </div>
                 ))}
@@ -294,7 +313,7 @@ export default function BulkAbsence({
               >
                 {reset
                   ? `Reset ${preview.total} entries`
-                  : `Apply ${preview.total} absences`}
+                  : `Apply ${preview.total} entries`}
               </button>
             )}
           </div>

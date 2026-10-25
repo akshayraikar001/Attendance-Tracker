@@ -1,4 +1,5 @@
 import { attendanceNotes } from "../../../shared/attendance-notes.js";
+import { localMessageTime } from "../utils/whatsapp-parser.js";
 import { saveEmployeePhone } from "../services/employee-phone.js";
 import { recalculateAttendance } from "../services/recalculate.js";
 import {
@@ -154,6 +155,25 @@ export function registerWorkspaceRoutes({
         if (stored.autoClockOutSince)
           rules.autoClockOutSince = stored.autoClockOutSince;
         else delete rules.autoClockOutSince;
+        if (rules.autoAbsentEnabled) {
+          if (stored.autoAbsentEnabled && stored.autoAbsentSince) {
+            rules.autoAbsentSince = stored.autoAbsentSince;
+            if (stored.autoAbsentThrough)
+              rules.autoAbsentThrough = stored.autoAbsentThrough;
+          } else {
+            const [configs] = await c.execute(
+              "SELECT config FROM whatsapp_config WHERE id=1",
+            );
+            const zone =
+              rules.attendanceTimeZone ||
+              parse(configs[0]?.config || {}).timeZone ||
+              "Asia/Kolkata";
+            rules.autoAbsentSince = localMessageTime(
+              Math.floor(Date.now() / 1000),
+              zone,
+            ).date;
+          }
+        }
         await c.execute("UPDATE settings SET rules=? WHERE id=1", [
           JSON.stringify(rules),
         ]);
@@ -202,24 +222,30 @@ export function registerWorkspaceRoutes({
             status: 400,
           });
         rules = resolveRules(settings, employees[0], e.date);
+        const [old] = await c.execute(
+          "SELECT * FROM attendance WHERE employeeId=? AND date=? FOR UPDATE",
+          [e.employeeId, e.date],
+        );
+        if (e.mode === "manual" && old[0]) {
+          for (const key of ["inTime", "outTime", "overnight"])
+            if (!Object.hasOwn(req.body, key))
+              e[key] = key === "overnight" ? Boolean(old[0][key]) : old[0][key];
+        }
         try {
           calc = calculate(e, rules);
         } catch (error) {
           throw Object.assign(error, { status: 400 });
         }
-        const [old] = await c.execute(
-          "SELECT * FROM attendance WHERE employeeId=? AND date=? FOR UPDATE",
-          [e.employeeId, e.date],
-        );
+
         await c.execute(
           `INSERT INTO attendance (employeeId,date,mode,inTime,outTime,overnight,status,workedMinutes,lateMinutes,earlyMinutes,overtimeMinutes,notes,rules) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?) ON DUPLICATE KEY UPDATE mode=VALUES(mode),inTime=VALUES(inTime),outTime=VALUES(outTime),overnight=VALUES(overnight),status=VALUES(status),workedMinutes=VALUES(workedMinutes),lateMinutes=VALUES(lateMinutes),earlyMinutes=VALUES(earlyMinutes),overtimeMinutes=VALUES(overtimeMinutes),notes=VALUES(notes),rules=VALUES(rules)`,
           [
             e.employeeId,
             e.date,
             e.mode,
-            e.mode === "time" ? e.inTime : null,
-            e.mode === "time" ? e.outTime : null,
-            e.mode === "time" ? e.overnight : false,
+            e.inTime,
+            e.outTime,
+            e.overnight,
             calc.status,
             calc.workedMinutes,
             calc.lateMinutes,

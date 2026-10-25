@@ -1,3 +1,4 @@
+import { withoutMentions } from "../../../shared/message-text.js";
 import { localMessageTime } from "./whatsapp-parser.js";
 
 const months = [
@@ -38,10 +39,13 @@ export function leaveDates(from, to) {
   );
 }
 export function parseLeaveMessage(text, timestamp, timeZone) {
-  const normalized = text
+  const normalized = withoutMentions(text)
     .toLowerCase()
     .replace(/sir(?=today|tom)/g, "sir ")
-    .replace(/\b(?:tomorow|tommorow|tommorrow|tomorrow|tomorw|tommorw)\b/g, "tomorrow")
+    .replace(
+      /\b(?:tomorow|tommorow|tommorrow|tomorrow|tomorw|tommorw)\b/g,
+      "tomorrow",
+    )
     .replace(/(\d)(?:st|nd|rd|th)\b/g, "$1")
     .replace(/half[ -]?day/g, "half day");
   if (!/\bleave\b|\bhalf day\b/.test(normalized)) return null;
@@ -84,44 +88,147 @@ export function parseLeaveMessage(text, timestamp, timeZone) {
     };
   };
   const relatives =
-    normalized.match(/\b(?:day after tomorrow|tomorrow|today|yesterday)\b/g) || [];
+    normalized.match(/\b(?:day after tomorrow|tomorrow|today|yesterday)\b/g) ||
+    [];
   const relativeDate = (word) => {
-    const offset = { today: 0, tomorrow: 1, "day after tomorrow": 2, yesterday: -1 }[word];
-    return new Date(Date.parse(base) + offset * 86400000).toISOString().slice(0, 10);
+    const offset = {
+      today: 0,
+      tomorrow: 1,
+      "day after tomorrow": 2,
+      yesterday: -1,
+    }[word];
+    return new Date(Date.parse(base) + offset * 86400000)
+      .toISOString()
+      .slice(0, 10);
   };
   // Requests currently store one inclusive range. Never turn separate dates
   // into a range that would also approve unrequested days.
   const consecutive = (values, reason) => {
-    if (values.some((value) => !value)) return review("Invalid date. Choose dates manually.");
+    if (values.some((value) => !value))
+      return review("Invalid date. Choose dates manually.");
     const days = [...new Set(values)].sort();
-    if (days.some((value, i) => i && Date.parse(value) - Date.parse(days[i - 1]) !== 86400000))
-      return review("Separate dates: review each requested date; do not include the days between them.");
+    if (
+      days.some(
+        (value, i) =>
+          i && Date.parse(value) - Date.parse(days[i - 1]) !== 86400000,
+      )
+    )
+      return review(
+        "Separate dates: review each requested date; do not include the days between them.",
+      );
     return finish(days[0], days.at(-1), reason);
   };
-  const lists = [...normalized.matchAll(new RegExp(
-    `\\b(\\d{1,2}(?:\\s*(?:,|&|\\band\\b)\\s*\\d{1,2})+)(?:\\s+(${monthPattern}))?(?:\\s+(\\d{4}))?\\b`,
-    "g",
-  ))];
+  const weekdayPattern =
+    /\b(?:mon(?:day)?|tue(?:s(?:day)?)?|wed(?:nesday|s)?|thu(?:rs?(?:day)?)?|fri(?:day)?|sat(?:urday)?|sun(?:day)?)\b/g;
+  const weekdayWords = [...normalized.matchAll(weekdayPattern)];
+  if (weekdayWords.length) {
+    const rest = normalized.replace(weekdayPattern, "");
+    if (
+      relatives.length ||
+      /\d|\b(?:next|last|following|upcoming|every|each|except|excluding|or|return|returning|back|resume|resuming)\b/.test(
+        rest,
+      )
+    )
+      return review(
+        "Mixed dates, another week or exclusions: choose the intended dates manually.",
+      );
+    const monday =
+      Date.parse(base) - ((new Date(base).getUTCDay() + 6) % 7) * 86400000;
+    const names = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"];
+    const values = weekdayWords.map((match) =>
+      new Date(monday + names.indexOf(match[0].slice(0, 3)) * 86400000)
+        .toISOString()
+        .slice(0, 10),
+    );
+    const reason =
+      "Weekdays use Monday–Sunday of the message's week in the group timezone. Confirm before approving.";
+    const hasRange = weekdayWords.some((match) =>
+      /^\s*(?:to\b|until\b|till\b|through\b|[-–])/.test(
+        normalized.slice(match.index + match[0].length),
+      ),
+    );
+    if (hasRange) {
+      const between =
+        weekdayWords.length === 2
+          ? normalized
+              .slice(
+                weekdayWords[0].index + weekdayWords[0][0].length,
+                weekdayWords[1].index,
+              )
+              .trim()
+          : "";
+      if (!/^(?:to|until|till|through|[-–])$/.test(between))
+        return review("Unclear weekday range. Choose dates manually.");
+      return finish(values[0], values[1], reason);
+    }
+    return consecutive(values, reason);
+  }
+  const lists = [
+    ...normalized.matchAll(
+      new RegExp(
+        `\\b(\\d{1,2}(?:\\s*(?:,|&|\\band\\b)\\s*\\d{1,2})+)(?:\\s+(${monthPattern}))?(?:\\s+(\\d{4}))?\\b`,
+        "g",
+      ),
+    ),
+  ];
   if (lists.length && !/\d[-/]\d/.test(normalized)) {
     const list = lists[0];
-    const remainder = normalized.replace(list[0], "").replace(/\b(?:day after tomorrow|tomorrow|today|yesterday)\b/g, "");
-    if (lists.length !== 1 || /\d|\b(?:except|excluding|to|until|till|through|next|yesterday|today|tomorrow)\b/.test(remainder))
-      return review("Additional dates or exclusions: choose the intended dates manually.");
+    const remainder = normalized
+      .replace(list[0], "")
+      .replace(/\b(?:day after tomorrow|tomorrow|today|yesterday)\b/g, "");
+    if (
+      lists.length !== 1 ||
+      /\d|\b(?:except|excluding|to|until|till|through|next|yesterday|today|tomorrow)\b/.test(
+        remainder,
+      )
+    )
+      return review(
+        "Additional dates or exclusions: choose the intended dates manually.",
+      );
     const listMonth = list[2] ? months.indexOf(list[2].slice(0, 3)) + 1 : month;
-    const values = list[1].match(/\d+/g).map((day) => date(+(list[3] || year), listMonth, +day));
-    return consecutive([...relatives.map(relativeDate), ...values], "Listed dates use the message month/year when omitted. Confirm before approving.");
+    const values = list[1]
+      .match(/\d+/g)
+      .map((day) => date(+(list[3] || year), listMonth, +day));
+    return consecutive(
+      [...relatives.map(relativeDate), ...values],
+      "Listed dates use the message month/year when omitted. Confirm before approving.",
+    );
   }
   if (relatives.length) {
-    const remainder = normalized.replace(/\b(?:day after tomorrow|tomorrow|today|yesterday)\b/g, "");
-    if (/\d|\b(?:except|excluding|days|weeks|next)\b/.test(remainder))
-      return review("Additional dates or duration: choose the intended dates manually.");
-    const rangeWords = /\b(?:until|till|through|to)\b/.test(remainder);
+    const remainder = normalized.replace(
+      /\b(?:day after tomorrow|tomorrow|today|yesterday)\b/g,
+      "",
+    );
+    if (
+      /\d|\b(?:except|excluding|days|weeks|next|monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b/.test(
+        remainder,
+      )
+    )
+      return review(
+        "Additional dates or duration: choose the intended dates manually.",
+      );
+    const rangeWords =
+      /\b(?:day after tomorrow|tomorrow|today|yesterday)\s+(?:until|till|through|to)\b/.test(
+        normalized,
+      );
     if (rangeWords) {
-      if (relatives.length !== 2 || !/\b(?:yesterday|today|tomorrow|day after tomorrow)\s+(?:to|until|till|through)\s+(?:yesterday|today|tomorrow|day after tomorrow)\b/.test(normalized))
+      if (
+        relatives.length !== 2 ||
+        !/\b(?:yesterday|today|tomorrow|day after tomorrow)\s+(?:to|until|till|through)\s+(?:yesterday|today|tomorrow|day after tomorrow)\b/.test(
+          normalized,
+        )
+      )
         return review("Incomplete relative range. Choose dates manually.");
-      return finish(relativeDate(relatives[0]), relativeDate(relatives[1]), "Relative dates use the message date and selected timezone.");
+      return finish(
+        relativeDate(relatives[0]),
+        relativeDate(relatives[1]),
+        "Relative dates use the message date and selected timezone.",
+      );
     }
-    return consecutive(relatives.map(relativeDate), "Relative dates use the WhatsApp message date and selected timezone.");
+    return consecutive(
+      relatives.map(relativeDate),
+      "Relative dates use the WhatsApp message date and selected timezone.",
+    );
   }
   const iso = [...normalized.matchAll(/\b\d{4}-\d{2}-\d{2}\b/g)].map(
     (m) => m[0],

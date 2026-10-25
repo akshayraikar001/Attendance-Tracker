@@ -117,7 +117,7 @@ globalThis.fetch = async (url, options) => {
       entries = entries.filter((r) => !matches(r));
       resetWrites++;
     }
-  } else if (url.startsWith("/api/attendance/bulk-absence")) {
+  } else if (url.startsWith("/api/attendance/bulk-attendance")) {
     const payload = JSON.parse(options.body);
     if (url.endsWith("/preview")) {
       bulkPreviews++;
@@ -451,7 +451,7 @@ try {
   fireEvent.click(
     screen.getByRole("button", { name: "Attendance", exact: true }),
   );
-  fireEvent.click(screen.getByRole("button", { name: "Bulk absent" }));
+  fireEvent.click(screen.getByRole("button", { name: "Bulk attendance" }));
   dialog = screen.getByRole("dialog");
   assert.equal(
     within(dialog).getByLabelText("Skip weekly holidays and named holidays")
@@ -473,17 +473,30 @@ try {
     target: { value: "2026-10-07" },
   });
   fireEvent.submit(dialog.querySelector("form"));
-  await within(dialog).findByRole("button", { name: "Apply 2 absences" });
+  await within(dialog).findByRole("button", { name: "Apply 2 entries" });
   assert.equal(bulkWrites, 0);
+  fireEvent.change(within(dialog).getByLabelText("Attendance status"), {
+    target: { value: "Present" },
+  });
+  assert.equal(
+    within(dialog).queryByRole("button", { name: "Apply 2 entries" }),
+    null,
+  );
+  assert.equal(
+    within(dialog).getByLabelText("Replace existing attendance with Present")
+      .checked,
+    false,
+  );
+
   fireEvent.click(within(dialog).getByRole("button", { name: "Next to" }));
   assert.equal(
-    within(dialog).queryByRole("button", { name: "Apply 2 absences" }),
+    within(dialog).queryByRole("button", { name: "Apply 2 entries" }),
     null,
   );
   fireEvent.submit(dialog.querySelector("form"));
   await waitFor(() => assert.equal(bulkPreviews, 2));
   fireEvent.click(
-    await within(dialog).findByRole("button", { name: "Apply 2 absences" }),
+    await within(dialog).findByRole("button", { name: "Apply 2 entries" }),
   );
   await waitFor(() => assert.equal(bulkWrites, 1));
   await waitFor(() =>
@@ -659,10 +672,20 @@ try {
   fireEvent.click(screen.getByRole("button", { name: "Timings", exact: true }));
   assert.equal(screen.getByLabelText("Deduct a 1-hour break").checked, false);
   assert.equal(
-    screen.getByLabelText("Automatic Out time at 8 PM").checked,
-    true,
+    screen.getByLabelText("Automatically mark absent after day end").checked,
+    false,
   );
+  fireEvent.click(
+    screen.getByLabelText("Automatically mark absent after day end"),
+  );
+  assert.equal(screen.getByLabelText("Automatic Out time").checked, true);
   fireEvent.click(screen.getByLabelText("Deduct a 1-hour break"));
+  fireEvent.change(screen.getByLabelText("Check after"), {
+    target: { value: "9:00 PM" },
+  });
+  fireEvent.change(screen.getByLabelText("Save Out time as"), {
+    target: { value: "7:30 PM" },
+  });
   fireEvent.click(screen.getByText("Day-specific shift times"));
   fireEvent.click(screen.getByLabelText("Saturday"));
   fireEvent.change(screen.getByLabelText("Saturday start"), {
@@ -673,6 +696,8 @@ try {
   });
   fireEvent.click(screen.getByRole("button", { name: "Save timings" }));
   await waitFor(() => assert.equal(settings.breakDeductionEnabled, true));
+  assert.equal(settings.autoClockOutCutoff, "21:00");
+  assert.equal(settings.autoClockOutTime, "19:30");
   assert.equal(settings.weekdayShifts[6].shiftStart, "11:00");
   assert.equal(settings.weekdayShifts[6].shiftEnd, "17:00");
   fireEvent.click(

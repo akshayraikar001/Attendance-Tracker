@@ -63,3 +63,39 @@ See [ARCHITECTURE.md](ARCHITECTURE.md) for the current complete file map. Key lo
 The current source follows the eFlexo reference projects' separation of pages, layouts, shared components, configuration, controllers, services and database setup. See [ARCHITECTURE.md](ARCHITECTURE.md) for the current file map and the root README for portable setup. The earlier archive remains a pre-restructure checkpoint. No application data, environment secrets or device credentials were moved. WhatsApp fetching and leave collection now live under `server/src/services/`, with HTTP handlers under `server/src/controllers/`.
 
 Structure validation passed: all 37 unit tests; attendance/auth/WhatsApp/leave/time-picker UI suites; admin/auth/holiday/WhatsApp/leave/automatic-Out-time database suites; workbook exports; production build; desktop/mobile browser checks for settings, calendar, reports, WhatsApp panel spacing and collapsed navigation. Live read-only API checks and built-frontend serving also passed. The existing ExcelJS bundle-size warning remains. No commit or push was made.
+
+## Attendance updates — 15 October 2026
+
+- Pending leave requests with missing dates are re-parsed on listing using their original timestamp and configured timezone. Today/tomorrow spellings, consecutive relative dates and comma-separated consecutive dates fill both review inputs; nonconsecutive dates remain for manual review. Decided requests are unchanged.
+- BulkAttendance replaces the BulkAbsence screen and supports Present, Absent, Half day and Attended as direct statuses. Preview tokens include the chosen status; reset and overwrite protection remain. The old bulk-absence API is retained as an Absent-only compatibility route.
+- Monthly reports and Excel include Daily working avg: total recorded minutes divided by Present + Half-day count. Zero qualifying days returns no average.
+- Optional auto absence is off by default. Completed local days since activation are checked on startup/every minute; holidays, saved attendance, inactive employees and pre-employment dates are skipped, and overnight shifts wait until finished. A persistent ledger/cursor preserves deliberate clearing and catches up in 31-day batches. Re-enabling starts from the new activation day. Untouched system absences can be replaced by valid WhatsApp IN according to approval settings; manually modified entries retain overwrite protection.
+- `npm run db:setup` applied the `auto_absences` table locally; automatic absence remains disabled in the workspace.
+- Verification: 46 unit tests; admin, leave, WhatsApp, automation and export suites; main UI, 12/24-hour editor and leave UI regressions; production build; browser checks at 1440px and 390px. Live read-only settings/leave endpoints returned successfully. Existing unrelated working-tree changes were preserved; no commit was made.
+
+## WhatsApp history and automatic attendance safeguards — 15 October 2026
+
+- Clear archives messages for the selected device/group using `whatsapp_events.clearedAt`; deduplication and attendance are retained. Show cleared history lists the latest 100 archived messages. This resolves the earlier clear/deduplication concern above for newly cleared messages.
+- Automatic WhatsApp processing, including queued retries and overwrite, may modify only today/yesterday in the group timezone. Older attendance dates remain for manual approval, including overnight OUT messages that belong to an older IN date. Explicit manual approval/overwrite remains available.
+- Automatic Out time now has configurable cutoff, assigned Out time and restart catch-up toggle in Settings → Timings. Defaults remain 20:00, 19:05 and catch-up on. This separate scheduled fallback retains its activation boundary and existing/manual/overnight protections.
+- Regression coverage includes the automatic retry path, local midnight, older manual overwrite, archive deduplication, adjustable cutoff boundaries, UI history switching and saving time controls.
+
+## Preserved times and daily WhatsApp controls — 22 October 2026
+
+- Individual direct-status edits preserve omitted saved times; explicit empty/null fields clear only the requested time. Measured hours are calculated from retained times while the chosen direct status stays authoritative. Existing manual entries without times no longer receive a default In time merely by opening the editor.
+- Bulk status replacement and approved leave retain existing In/Out times and measured values. Confirmation text explains preservation. Reset still removes the selected attendance entries.
+- WhatsApp lists complete day counts in the selected group timezone, with today expanded and older dates collapsed. Per-day message pages load 100 at a time. Day checkboxes support scoped bulk sync/clear; clearing archives the entire selected day, including unloaded pages, without touching attendance or deduplication.
+- Sync today/date/selected days and all history use the existing persisted batch/cursor workflow. Selected dates filter both attendance and leave collection and do not advance the ordinary incremental checkpoint. Active jobs must finish before another selection starts. Existing approval, source boundary and today/yesterday safeguards remain.
+- Sync health uses a red/green indicator and explicit paused/disconnected/failed/in-progress/ready/completed text.
+- Validation: 48 unit tests; admin, WhatsApp, leave, automation and workbook integration checks; WhatsApp controls, both attendance-editor time formats and main UI checks; production build; 1440px and 390px browser checks. The existing ExcelJS bundle-size warning remains. No commit or push was made.
+
+## Deferred review findings — 25 October 2026
+
+User asked to remember these and remind them later. Bring up outstanding items at the next commit-readiness/release review or before client handoff. They do not prevent a checkpoint commit; they are not fixed yet. No timed notification is scheduled.
+
+- [ ] **Attendance editor (medium):** On a new entry, enter a time in Direct status, switch to In / out time, then back. The entered time is cleared. Reproduced in an additional UI check. In `client/src/layouts/WorkspaceLayout.jsx`, mark direct-status time edits as user-entered (`timeTouched`) so mode changes preserve them.
+- [ ] **Leave suggestions (medium):** `Leave today or tomorrow` incorrectly suggests both dates. `Leave on Friday in November`, sent 25 October 2026, incorrectly suggests 23 October. In `server/src/utils/leave-parser.js`, require manual date selection for alternatives and conflicting month references while preserving clear consecutive-date/current-week requests. Approval remains manual.
+- [ ] **Chatery setup (medium):** README pins an upstream version without sender recovery but omits the patch step. Include/link `docs/WHATSAPP_SENDER_RECOVERY.md` and `docs/chatery-sender-recovery.patch` in the main setup instructions, or pin a verified version containing the fix.
+- [ ] **Dependencies:** Production audit reported high-severity advisories for installed `body-parser` 1.20.8 and `zod` 3.25.76. Recheck advisories, update carefully and rerun regression tests before public deployment. The proposed Zod fix was a major-version update; do not apply blindly. Exploitability against Dayline was not confirmed.
+
+Review checks passed: 51 unit tests; auth/admin/WhatsApp/leave/automation/export/holiday suites; main UI and 12/24-hour attendance editor; auth/time-picker/WhatsApp/leave/employee/users/locations/time-away UI suites; production build and Git whitespace checks. The additional editor reproduction failed, confirming the first finding. Secret-signature scanning found no matches. Live WhatsApp delivery/QR, Keycloak and external map providers were not verified end to end. Logs are under ignored `.local/review/`. No application-code fixes or commit were made during the review.

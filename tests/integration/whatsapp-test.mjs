@@ -172,9 +172,8 @@ try {
     null,
   );
   const midnight =
-    Date.parse(
-      new Date((t - 86400) * 1000).toISOString().slice(0, 10) + "T00:00:00Z",
-    ) / 1000;
+    Date.parse(new Date(t * 1000).toISOString().slice(0, 10) + "T00:00:00Z") /
+    1000;
   await service.ingest(msg("nightin", "IN 20:00", 4, midnight - 3600), "test");
   assert.equal(
     (
@@ -274,7 +273,7 @@ try {
       ...cfg,
       autoApprove: true,
       messagesPerSync: 200,
-      syncIntervalMinutes: 5,
+      syncIntervalMinutes: 120,
       revision: 100,
     }),
   ]);
@@ -316,21 +315,28 @@ try {
   );
   const firstFetches = fetches;
   await sync.poll({ automatic: true });
-  clock += 299999;
+  clock += 14999;
   await sync.poll({ automatic: true });
   assert.equal(
     fetches,
     firstFetches,
-    "Automatic sync must honor its interval, including page refreshes",
+    "An unfinished scan resumes after 15 seconds, not another 120 minutes",
   );
   clock++;
   failPage = true;
   await sync.poll({ automatic: true });
   assert.match(sync.status.error, /Temporary connection/);
   assert.equal((await sync.config()).syncProgress.scanned, 200);
+  const failedFetches = fetches;
+  clock += 59999;
+  await sync.poll({ automatic: true });
+  assert.equal(fetches, failedFetches);
+  clock++;
+  await sync.poll({ automatic: true });
+  assert.equal((await sync.config()).syncProgress.scanned, 400);
   sync = newService(); // Restart must resume the persisted cursor and queue.
   await sync.poll();
-  assert.equal((await sync.config()).syncProgress.scanned, 400);
+  assert.equal((await sync.config()).syncProgress.scanned, 600);
   for (let i = 0; i < 20 && (await sync.config()).syncProgress; i++)
     await sync.poll();
   assert.equal((await sync.config()).syncProgress, null);
@@ -391,6 +397,57 @@ try {
       }),
     ]);
   };
+  // A previously fetched OUT is repaired when a delayed IN finally arrives,
+  // even when that OUT is absent from the provider's next response.
+  await query(
+    "INSERT INTO employees (id,name,department,role,status,phone) VALUES (8,'Late IN','Sales','Staff','Active','+919000000008')",
+  );
+  await resetSync({ autoApprove: true, syncIntervalMinutes: 120 });
+  let lateClock = Date.now();
+  let lateFetches = 0;
+  let lateMessages = [msg("late-out", "OUT 18:00", 8)];
+  const lateService = createWhatsAppService({
+    query,
+    transaction,
+    audit,
+    now: () => lateClock,
+    request: async () => {
+      lateFetches++;
+      return { messages: lateMessages, hasMore: false };
+    },
+  });
+  await lateService.poll({ automatic: true });
+  assert.equal(
+    (
+      await query(
+        "SELECT state FROM whatsapp_events WHERE messageId='late-out'",
+      )
+    )[0].state,
+    "review",
+  );
+  lateMessages = [msg("late-in", "IN 09:00", 8, t - 60)];
+  lateClock += 120 * 60000 - 1;
+  await lateService.poll({ automatic: true });
+  assert.equal(
+    lateFetches,
+    1,
+    "Completed scans still respect the 120-minute setting",
+  );
+  lateClock++;
+  await lateService.poll({ automatic: true });
+  assert.equal(lateService.status.error, null);
+  const [lateDay] = await query("SELECT * FROM attendance WHERE employeeId=8");
+  assert.equal(lateDay.inTime, "09:00");
+  assert.equal(lateDay.outTime, "18:00");
+  assert.equal(
+    (
+      await query(
+        "SELECT state FROM whatsapp_events WHERE messageId='late-out'",
+      )
+    )[0].state,
+    "applied",
+  );
+
   // Applying a large pending queue is also bounded and survives a restart.
   await resetSync();
   let queueCalls = 0;
@@ -506,9 +563,15 @@ try {
   const routes = new Map();
   const app = {
     use() {},
-    get() {},
-    post() {},
-    delete() {},
+    get(path, handler) {
+      routes.set("GET " + path, handler);
+    },
+    post(path, handler) {
+      routes.set("POST " + path, handler);
+    },
+    delete(path, handler) {
+      routes.set("DELETE " + path, handler);
+    },
     put(path, handler) {
       routes.set(path, handler);
     },
@@ -726,6 +789,119 @@ try {
   console.log(
     "PASS: group/device boundaries persist across switches, legacy cutoff recovery imports missing OUT, deduplication preserves existing times, leave stays pending, and auto-approval off stays off.",
   );
+  // Production regression: a history IN had participant outside key, and
+  // Chatery returned the group as sender. Retry must fetch fresh identity.
+  await resetSync({ autoApprove: true });
+  await query(
+    "INSERT INTO employees (id,name,department,role,status,phone) VALUES (100,'History Sender','Sales','Staff','Active','+9190000000100')",
+  );
+  const unknown = {
+    ...msg("unknown-history", "In time 2:07", 100),
+    sender: cfg.groupId,
+    senderName: "",
+  };
+  let fresh = {
+    ...unknown,
+    sender: "9190000000100@s.whatsapp.net",
+    senderName: "History Sender",
+  };
+  let refreshCount = 0;
+  const identityService = createWhatsAppService({
+    query,
+    transaction,
+    audit,
+    request: async () => {
+      refreshCount++;
+      return { messages: [fresh], hasMore: false };
+    },
+  });
+  assert.equal(
+    (await identityService.ingest(unknown, cfg.sessionId)).state,
+    "review",
+  );
+  const [unresolved] = await query(
+    "SELECT * FROM whatsapp_events WHERE messageId='unknown-history'",
+  );
+  assert.equal(unresolved.senderId, "unresolved");
+  assert.match(unresolved.reason, /Retry to fetch/);
+  fresh = unknown;
+  assert.equal(
+    (await identityService.retryEvent(unresolved.id)).state,
+    "review",
+  );
+  assert.equal(
+    (
+      await query("SELECT senderId FROM whatsapp_events WHERE id=?", [
+        unresolved.id,
+      ])
+    )[0].senderId,
+    "unresolved",
+  );
+  fresh = {
+    ...unknown,
+    sender: "9190000000100@s.whatsapp.net",
+    senderName: "History Sender",
+  };
+  assert.equal(
+    (await identityService.retryEvent(unresolved.id)).state,
+    "applied",
+  );
+  assert.equal(refreshCount, 2);
+  const [repairedSender] = await query(
+    "SELECT * FROM whatsapp_events WHERE id=?",
+    [unresolved.id],
+  );
+  assert.equal(repairedSender.senderId, "phone:9190000000100");
+  assert.equal(repairedSender.senderName, "History Sender");
+  assert.equal(repairedSender.employeeId, 100);
+  assert.equal(
+    (await query("SELECT inTime FROM attendance WHERE employeeId=100"))[0]
+      .inTime,
+    "14:07",
+  );
+  await identityService.retryEvent(unresolved.id);
+  assert.equal(
+    refreshCount,
+    2,
+    "Applied messages are not fetched or applied again",
+  );
+
+  // A normal rescan updates unresolved identities even with auto-approve off,
+  // without turning sender recovery into approval or overwriting manual edits.
+  await resetSync({ autoApprove: false });
+  const unknownOut = {
+    ...unknown,
+    id: "unknown-history-out",
+    content: "OUT 18:00",
+  };
+  await identityService.ingest(unknownOut, cfg.sessionId);
+  fresh = { ...unknownOut, participant: "9190000000100@s.whatsapp.net" };
+  await identityService.poll();
+  assert.equal(identityService.status.error, null);
+  const [reviewOut] = await query(
+    "SELECT * FROM whatsapp_events WHERE messageId='unknown-history-out'",
+  );
+  assert.equal(reviewOut.senderId, "phone:9190000000100");
+  assert.equal(reviewOut.state, "review");
+  assert.equal(reviewOut.employeeId, 100);
+  assert.equal(
+    (await query("SELECT outTime FROM attendance WHERE employeeId=100"))[0]
+      .outTime,
+    null,
+  );
+  await query("UPDATE attendance SET notes='Manual edit' WHERE employeeId=100");
+  assert.match(
+    (await identityService.retryEvent(reviewOut.id)).reason,
+    /manually/,
+  );
+  assert.equal(
+    (await query("SELECT outTime FROM attendance WHERE employeeId=100"))[0]
+      .outTime,
+    null,
+  );
+  console.log(
+    "PASS: unknown sender refresh, persistent recovered identity, no fabricated LID, exact IN time, idempotency, approval-off recovery and manual edit protection.",
+  );
   const count = (await query("SELECT * FROM attendance")).length;
   await query("UPDATE whatsapp_config SET config=? WHERE id=1", [
     JSON.stringify({ ...cfg, enabled: false }),
@@ -734,6 +910,328 @@ try {
   assert.equal((await query("SELECT * FROM attendance")).length, count);
   console.log(
     "PASS: selected-group privacy, phone/LID mapping, IN/OUT calculation, deduplication, conflicts, manual-edit protection, manual-status overwrite and subsequent OUT, out-before-in review, overnight shifts, pause and polling.",
+  );
+  // Use local midnight: Thursday in India while UTC is still Wednesday.
+  const boundaryNow = Date.parse("2026-10-14T19:00:00Z");
+  await query(
+    "INSERT INTO employees (id,name,department,role,status) VALUES (101,'Boundary','Sales','Staff','Active')",
+  );
+  await query(
+    "INSERT INTO whatsapp_links (identity,employeeId) VALUES ('phone:919000000009',101)",
+  );
+  await query("UPDATE whatsapp_config SET config=? WHERE id=1", [
+    JSON.stringify({
+      ...cfg,
+      since: 0,
+      timeZone: "Asia/Kolkata",
+      autoApprove: true,
+      autoOverwrite: true,
+    }),
+  ]);
+  const boundary = createWhatsAppService({
+    query,
+    transaction,
+    audit,
+    now: () => boundaryNow,
+  });
+  const oldMessage = msg(
+    "boundary-old",
+    "IN 10:00",
+    9,
+    Date.parse("2026-10-13T05:00:00Z") / 1000,
+  );
+  // retry=true is also used by automatic sync and must NOT bypass the limit.
+  assert.equal(
+    (await boundary.ingest(oldMessage, "test", true, true)).state,
+    "review",
+  );
+  assert.equal(
+    (await query("SELECT * FROM attendance WHERE employeeId=101")).length,
+    0,
+  );
+  let event = (
+    await query("SELECT * FROM whatsapp_events WHERE messageId='boundary-old'")
+  )[0];
+  assert.equal((await boundary.retryEvent(event.id, true)).state, "applied");
+  const correction = {
+    ...oldMessage,
+    id: "boundary-correction",
+    content: "IN 11:00",
+  };
+  assert.equal(
+    (await boundary.ingest(correction, "test", true, true)).state,
+    "review",
+  );
+  assert.equal(
+    (await query("SELECT inTime FROM attendance WHERE employeeId=101"))[0]
+      .inTime,
+    "10:00",
+  );
+  event = (
+    await query(
+      "SELECT * FROM whatsapp_events WHERE messageId='boundary-correction'",
+    )
+  )[0];
+  assert.equal((await boundary.retryEvent(event.id, true)).state, "applied");
+  assert.equal(
+    (await query("SELECT inTime FROM attendance WHERE employeeId=101"))[0]
+      .inTime,
+    "11:00",
+  );
+  // An OUT posted yesterday must not change an older overnight attendance date.
+  const oldOut = msg(
+    "boundary-overnight",
+    "OUT 04:00 AM",
+    9,
+    Date.parse("2026-10-13T23:00:00Z") / 1000,
+  );
+  assert.equal(
+    (await boundary.ingest(oldOut, "test", true, true)).state,
+    "review",
+  );
+  for (const day of [14, 15]) {
+    const incoming = msg(
+      "boundary-" + day,
+      "IN 10:00",
+      9,
+      Date.parse(`2026-10-${day}T00:00:00+05:30`) / 1000,
+    );
+    assert.equal(
+      (await boundary.ingest(incoming, "test", true, true)).state,
+      "applied",
+    );
+  }
+  const beforeClear = await query(
+    "SELECT * FROM attendance WHERE employeeId=101 ORDER BY date",
+  );
+  await routes.get("DELETE /api/whatsapp/events")({}, { json() {} });
+  assert.ok(
+    (
+      await query(
+        "SELECT clearedAt FROM whatsapp_events WHERE messageId='boundary-correction'",
+      )
+    )[0].clearedAt,
+  );
+  assert.equal(
+    (
+      await query(
+        "SELECT * FROM whatsapp_events WHERE sessionId='test' AND groupId=? AND clearedAt IS NULL",
+        [cfg.groupId],
+      )
+    ).length,
+    0,
+  );
+  await boundary.ingest(correction, "test", true, true);
+  assert.deepEqual(
+    await query("SELECT * FROM attendance WHERE employeeId=101 ORDER BY date"),
+    beforeClear,
+  );
+  console.log(
+    "PASS: local today/yesterday guard, automatic retries, old manual overwrite, overnight protection, archived history and deduplication.",
+  );
+  // Yesterday's OUT is inside the incremental window, but its IN is outside.
+  // Search must cross the old cutoff and survive a one-message page limit.
+  const recoveryNow = Date.parse(
+    new Date().toISOString().slice(0, 10) + "T18:00:00Z",
+  );
+  const yesterdayStart = recoveryNow / 1000 - 18 * 3600 - 86400;
+  for (const variant of [0, 1, 2]) {
+    const autoApprove = variant !== 1;
+    const previousOut = variant === 2;
+    const employeeId = 102 + variant;
+    const phone = "917777001" + employeeId;
+    await query(
+      "INSERT INTO employees (id,name,department,role,status,phone) VALUES (?, 'Recovery','Sales','Staff','Active',?)",
+      [employeeId, "+" + phone],
+    );
+    await resetSync({
+      autoApprove,
+      messagesPerSync: 1,
+      checkedThrough: recoveryNow / 1000,
+      lastHistoryScan: recoveryNow / 1000,
+      since: yesterdayStart - 86400,
+    });
+    const recoveryMessages = [
+      {
+        ...msg(
+          "recover-out-" + employeeId,
+          "OUT 19:00",
+          1,
+          yesterdayStart + 19 * 3600,
+        ),
+        sender: phone + "@s.whatsapp.net",
+      },
+      {
+        ...msg(
+          "recover-in-" + employeeId,
+          "IN 09:00",
+          1,
+          yesterdayStart + 9 * 3600,
+        ),
+        sender: phone + "@s.whatsapp.net",
+      },
+    ];
+    const requestHistory = async (_, body) => {
+      const offset = previousOut || body.cursor ? 1 : 0;
+      return {
+        messages: [recoveryMessages[offset]],
+        cursor: recoveryMessages[offset].id,
+        hasMore: offset === 0,
+      };
+    };
+    const makeRecovery = () =>
+      createWhatsAppService({
+        query,
+        transaction,
+        audit,
+        now: () => recoveryNow,
+        request: requestHistory,
+      });
+    let recovery = makeRecovery();
+    if (previousOut) {
+      assert.equal(
+        (await recovery.ingest(recoveryMessages[0], "test")).state,
+        "review",
+      );
+      await recovery.poll();
+    } else {
+      await recovery.poll();
+      const progress = (await recovery.config()).syncProgress;
+      assert.equal(progress.phase, "fetch");
+      assert.ok(progress.cutoff < recoveryMessages[1].timestamp);
+      recovery = makeRecovery(); // Persisted cursor/cutoff must survive restart.
+      await recovery.poll();
+      await recovery.poll();
+    }
+    assert.equal(recovery.status.error, null);
+    const recovered = await query(
+      "SELECT * FROM attendance WHERE employeeId=?",
+      [employeeId],
+    );
+    if (autoApprove) {
+      assert.equal(recovered[0].inTime, "09:00");
+      assert.equal(recovered[0].outTime, "19:00");
+    } else {
+      assert.equal(recovered.length, 0);
+      assert.equal(
+        (
+          await query(
+            "SELECT * FROM whatsapp_events WHERE employeeId=? AND state='review'",
+            [employeeId],
+          )
+        ).length,
+        2,
+      );
+    }
+  }
+  console.log(
+    "PASS: OUT widens IN history search beyond incremental cutoff, restart pagination, matching and approval-off protection.",
+  );
+  // Selected-day sync is durable and does not advance the normal checkpoint.
+  const selectedDay = new Date(yesterdayStart * 1000)
+    .toISOString()
+    .slice(0, 10);
+  await resetSync({
+    enabled: true,
+    autoApprove: false,
+    since: 0,
+    checkedThrough: 123,
+    lastHistoryScan: 456,
+    syncProgress: {
+      phase: "fetch",
+      cursor: null,
+      scanned: 0,
+      startedAt: Math.floor(recoveryNow / 1000),
+      fullScan: false,
+      dates: [selectedDay],
+      cutoff: 0,
+    },
+  });
+  const scoped = createWhatsAppService({
+    query,
+    transaction,
+    audit,
+    now: () => recoveryNow,
+    request: async () => ({
+      messages: [
+        msg("scoped-today", "IN 10:00", 9, recoveryNow / 1000),
+        msg("scoped-yesterday", "IN 10:00", 9, yesterdayStart + 36000),
+      ],
+      hasMore: false,
+    }),
+  });
+  await scoped.poll();
+  assert.equal(scoped.status.error, null);
+  assert.equal(
+    (
+      await query(
+        "SELECT * FROM whatsapp_events WHERE messageId='scoped-today'",
+      )
+    ).length,
+    0,
+  );
+  assert.equal(
+    (
+      await query(
+        "SELECT * FROM whatsapp_events WHERE messageId='scoped-yesterday'",
+      )
+    )[0].state,
+    "review",
+  );
+  assert.equal((await scoped.config()).checkedThrough, 123);
+  assert.equal((await scoped.config()).lastHistoryScan, 456);
+
+  // Day lists use group-local dayMidnight, paginate, and clear only selected dates.
+  await query("UPDATE whatsapp_config SET config=? WHERE id=1", [
+    JSON.stringify({
+      ...cfg,
+      enabled: false,
+      groupId: "days@g.us",
+      timeZone: "Asia/Kolkata",
+    }),
+  ]);
+  const dayMidnight = Date.parse("2026-10-20T18:30:00Z") / 1000;
+  for (let i = 0; i < 102; i++)
+    await query(
+      "INSERT INTO whatsapp_events (id,sessionId,groupId,messageId,senderId,senderName,text,timestamp,state,reason) VALUES (?, 'test','days@g.us',?,'phone:919000000001','Test','IN 10:00',?,'review','Awaiting approval')",
+      ["day" + String(i).padStart(61, "0"), "day-" + i, dayMidnight + i],
+    );
+  await query(
+    "INSERT INTO whatsapp_events (id,sessionId,groupId,messageId,senderId,senderName,text,timestamp,state,reason) VALUES (?, 'test','days@g.us','previous-day','phone:919000000001','Test','IN 10:00',?,'review','Awaiting approval')",
+    ["b".repeat(64), dayMidnight - 1],
+  );
+  const listDay = async (queryParams) => {
+    let result;
+    await routes.get("GET /api/whatsapp/messages")(
+      { query: queryParams },
+      {
+        json(data) {
+          result = data;
+        },
+      },
+    );
+    return result;
+  };
+  let page = await listDay({ date: "2026-10-21" });
+  assert.equal(page.events.length, 100);
+  assert.equal(page.hasMore, true);
+  page = await listDay({ date: "2026-10-21", offset: 100 });
+  assert.equal(page.events.length, 2);
+  assert.equal(page.hasMore, false);
+  assert.equal((await listDay({ date: "2026-10-20" })).events.length, 1);
+  await routes.get("DELETE /api/whatsapp/events")(
+    { body: { dates: ["2026-10-21"] } },
+    { json() {} },
+  );
+  assert.equal((await listDay({ date: "2026-10-21" })).events.length, 0);
+  assert.equal(
+    (await listDay({ date: "2026-10-21", history: "archived" })).events.length,
+    100,
+  );
+  assert.equal((await listDay({ date: "2026-10-20" })).events.length, 1);
+  await assert.rejects(() => listDay({ date: "2026-02-30" }));
+  console.log(
+    "PASS: selected-day sync/checkpoints, timezone day boundaries, message pagination and scoped archive.",
   );
 } finally {
   if (pool) await pool.end();

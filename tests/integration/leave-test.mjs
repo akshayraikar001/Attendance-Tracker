@@ -242,6 +242,39 @@ try {
   const listed = await call("GET", "/api/leave");
   assert.equal(listed.total, 5);
   assert.equal(listed.hasMore, false);
+  // Existing pending requests with blank dates receive fresh suggestions, without writes.
+  const legacyHalf = requests.find((r) => r.messageId === "leave-half");
+  await query(
+    "UPDATE leave_requests SET text=?,fromDate=NULL,toDate=NULL WHERE id=?",
+    ["@919999999999 I need to take leave today and tommorw", legacyHalf.id],
+  );
+  const suggested = (await call("GET", "/api/leave")).requests.find(
+    (r) => r.id === legacyHalf.id,
+  );
+  const { localMessageTime } =
+    await import("../../server/src/utils/whatsapp-parser.js");
+  const messageDate = localMessageTime(
+    Number(legacyHalf.timestamp),
+    cfg.timeZone,
+  ).date;
+  assert.equal(suggested.fromDate, messageDate);
+  assert.equal(
+    suggested.toDate,
+    new Date(Date.parse(messageDate) + 86400000).toISOString().slice(0, 10),
+  );
+  assert.equal(
+    (
+      await query("SELECT fromDate FROM leave_requests WHERE id=?", [
+        legacyHalf.id,
+      ])
+    )[0].fromDate,
+    null,
+  );
+  // Restore the fixture used for subsequent approval assertions.
+  await query(
+    "UPDATE leave_requests SET text=?,fromDate=?,toDate=? WHERE id=?",
+    [legacyHalf.text, legacyHalf.fromDate, legacyHalf.toDate, legacyHalf.id],
+  );
   const approval = {
     employeeId: 1,
     kind: "Absent",
@@ -336,7 +369,7 @@ try {
   );
   assert.equal(
     (await query("SELECT * FROM attendance WHERE employeeId=2"))[0].inTime,
-    null,
+    current.inTime,
   );
   // Leave can collect independently while time importing remains paused.
   const stored = await sync.config();
@@ -383,7 +416,8 @@ try {
     (await query("SELECT * FROM attendance WHERE employeeId=1")).length,
     3,
   );
-  // Re-enabling time import after leave-only syncing must catch older IN messages.
+  // Re-enabling time import still fetches old IN messages, but dates before
+  // yesterday now require manual approval.
   const { createServer } = await import("node:http");
   const bridge = createServer((req, res) => {
     res.setHeader("Content-Type", "application/json");
@@ -418,6 +452,18 @@ try {
     assert.equal((await sync.config()).lastHistoryScan, 0);
     assert.equal((await sync.config()).leaveEnabled, true);
     await sync.poll();
+    const oldIn = (
+      await query(
+        "SELECT * FROM whatsapp_events WHERE messageId='older-paused-in'",
+      )
+    )[0];
+    assert.equal(oldIn.state, "review");
+    assert.match(oldIn.reason, /today and yesterday/);
+    assert.equal(
+      (await query("SELECT * FROM attendance WHERE employeeId=6")).length,
+      0,
+    );
+    assert.equal((await sync.retryEvent(oldIn.id)).state, "applied");
     assert.equal(
       (await query("SELECT * FROM attendance WHERE employeeId=6"))[0].inTime,
       "10:15",

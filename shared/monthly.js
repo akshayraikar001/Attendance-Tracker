@@ -51,11 +51,17 @@ export function monthlyData({
           entries.filter((r) => r.status === status).length,
         ]),
       );
+      const totalMinutes = entries.reduce(
+        (n, r) => n + (r.workedMinutes ?? 0),
+        0,
+      );
+      const workingDays = counts.Present + counts["Half day"];
       return {
         ...employee,
         entries,
         counts,
-        totalMinutes: entries.reduce((n, r) => n + (r.workedMinutes ?? 0), 0),
+        totalMinutes,
+        averageMinutes: workingDays ? totalMinutes / workingDays : null,
       };
     });
   const totals = Object.fromEntries(

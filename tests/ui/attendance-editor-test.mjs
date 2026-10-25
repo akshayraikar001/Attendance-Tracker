@@ -194,6 +194,22 @@ try {
     change("Out time", display(18));
     await save();
     assert.equal(entries.find((e) => e.employeeId === 1).workedMinutes, 480);
+    fireEvent.click(
+      within(dialog).getByRole("button", { name: "Direct status" }),
+    );
+    assert.equal(field("In time").value, display(10));
+    assert.equal(field("Out time").value, display(18));
+    change("Attendance status", "Half day");
+    await save();
+    assert.equal(entries.find((e) => e.employeeId === 1).inTime, "10:00");
+    assert.equal(entries.find((e) => e.employeeId === 1).outTime, "18:00");
+    assert.equal(entries.find((e) => e.employeeId === 1).status, "Half day");
+    fireEvent.click(
+      within(dialog).getByRole("button", { name: "Clear out time" }),
+    );
+    await save();
+    assert.equal(entries.find((e) => e.employeeId === 1).inTime, "10:00");
+    assert.equal(entries.find((e) => e.employeeId === 1).outTime, null);
 
     change("Employee", "2");
     assert.equal(field("In time").value, display(10, "31"));
@@ -216,6 +232,8 @@ try {
       within(dialog).getByRole("button", { name: "In / out time" }),
     );
     assert.equal(field("Out time").value, "");
+    assert.equal(field("In time").value, "");
+    change("In time", display(9));
     change("Out time", display(17));
     await save();
     assert.equal(entries.find((e) => e.employeeId === 3).mode, "time");
@@ -252,6 +270,9 @@ try {
       }),
     );
     dialog = screen.getByRole("dialog");
+    fireEvent.click(
+      within(dialog).getByRole("button", { name: "In / out time" }),
+    );
     fireEvent.click(
       within(dialog).getByRole("button", { name: "Clear both times" }),
     );

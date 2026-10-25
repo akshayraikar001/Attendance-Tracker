@@ -4,7 +4,7 @@ const parse = (value) =>
 // Caller holds the settings row lock. Updates and their audit trail commit together.
 export async function recalculateAttendance(connection, settings) {
   const [rows] = await connection.execute(
-    "SELECT a.*, e.department FROM attendance a JOIN employees e ON e.id=a.employeeId WHERE a.mode='time' ORDER BY a.id FOR UPDATE",
+    "SELECT a.*, e.department FROM attendance a JOIN employees e ON e.id=a.employeeId WHERE (a.mode='time' OR a.inTime IS NOT NULL) ORDER BY a.id FOR UPDATE",
   );
   let changed = 0;
   for (const row of rows) {

@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from "react";
 export default function UserManagement({ api, user, onLogout }) {
+  const [employees, setEmployees] = useState([]);
   const [users, setUsers] = useState([]),
     [edit, setEdit] = useState(null),
     [error, setError] = useState(""),
@@ -7,7 +8,12 @@ export default function UserManagement({ api, user, onLogout }) {
     [message, setMessage] = useState("");
   async function load() {
     try {
-      setUsers(await api("/users"));
+      const [accounts, people] = await Promise.all([
+        api("/users"),
+        api("/employees"),
+      ]);
+      setUsers(accounts);
+      setEmployees(people);
     } catch (e) {
       setError(e.message);
     }
@@ -15,11 +21,47 @@ export default function UserManagement({ api, user, onLogout }) {
   useEffect(() => {
     load();
   }, []);
+  function selectEmployee(value) {
+    const employee = employees.find((person) => person.id === Number(value));
+    setEdit((current) => {
+      if (!employee)
+        return {
+          ...current,
+          employeeId: null,
+          ...(!current.id ? { name: "", username: "" } : {}),
+        };
+      const base = employee.name
+        .normalize("NFKD")
+        .replace(/[\u0300-\u036f]/g, "")
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, ".")
+        .replace(/^\.+|\.+$/g, "")
+        .slice(0, 45);
+      let username = base.length >= 3 ? base : `employee.${employee.id}`;
+      const taken = new Set(
+        users.map((account) => account.username.toLowerCase()),
+      );
+      const stem = username;
+      let suffix = 0;
+      while (taken.has(username)) {
+        username = `${stem}.${employee.id}${suffix ? `.${suffix}` : ""}`;
+        suffix++;
+      }
+      return {
+        ...current,
+        employeeId: employee.id,
+        name: employee.name,
+        ...(!current.id ? { username } : {}),
+      };
+    });
+  }
   async function save(e) {
     e.preventDefault();
     setBusy(true);
     setError("");
     const data = Object.fromEntries(new FormData(e.currentTarget));
+    data.employeeId = data.employeeId ? Number(data.employeeId) : null;
+    data.keycloakSubject = data.keycloakSubject?.trim() || null;
     data.active = data.active === "on";
     if (!data.password) delete data.password;
     try {
@@ -49,12 +91,13 @@ export default function UserManagement({ api, user, onLogout }) {
           <p>
             Login accounts are separate from employee records. Admins manage
             users and settings; staff manage attendance, employees, and reports.
+            Employees can only view their linked attendance and reports.
           </p>
         </div>
         <button
           className="primary"
           onClick={() => {
-            setEdit({ name: "", username: "", role: "Staff", active: true });
+            setEdit({ name: "", username: "", role: "Employee", active: true });
             setError("");
           }}
         >
@@ -76,10 +119,29 @@ export default function UserManagement({ api, user, onLogout }) {
           <h3>{edit.id ? "Edit account" : "New account"}</h3>
           <div className="form-grid">
             <label>
+              Linked employee
+              <select
+                name="employeeId"
+                value={edit.employeeId || ""}
+                required={edit.role === "Employee"}
+                onChange={(e) => selectEmployee(e.target.value)}
+              >
+                <option value="">
+                  {edit.role === "Employee" ? "Select an employee" : "None"}
+                </option>
+                {employees.map((employee) => (
+                  <option key={employee.id} value={employee.id}>
+                    {employee.name}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label>
               Name
               <input
                 name="name"
-                defaultValue={edit.name}
+                value={edit.name}
+                onChange={(e) => setEdit({ ...edit, name: e.target.value })}
                 required
                 minLength={2}
                 maxLength={100}
@@ -89,7 +151,8 @@ export default function UserManagement({ api, user, onLogout }) {
               Username
               <input
                 name="username"
-                defaultValue={edit.email || edit.username}
+                value={edit.email || edit.username}
+                onChange={(e) => setEdit({ ...edit, username: e.target.value })}
                 required
                 disabled={!!edit.id}
                 minLength={3}
@@ -110,10 +173,27 @@ export default function UserManagement({ api, user, onLogout }) {
             </label>
             <label>
               Access role
-              <select name="role" defaultValue={edit.role}>
+              <select
+                name="role"
+                value={edit.role}
+                onChange={(e) => setEdit({ ...edit, role: e.target.value })}
+              >
+                <option>Employee</option>
                 <option>Staff</option>
                 <option>Admin</option>
               </select>
+            </label>
+            <label>
+              Keycloak user ID (optional)
+              <input
+                name="keycloakSubject"
+                defaultValue={edit.keycloakSubject || ""}
+                maxLength={255}
+              />
+              <small>
+                Leave blank for username and password login. Only needed to link
+                an existing Keycloak account for single sign-on.
+              </small>
             </label>
             <label className="checkbox">
               <input

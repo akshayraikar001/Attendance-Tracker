@@ -32,6 +32,7 @@ const labels = {
   groupName: "WhatsApp group",
   timeZone: "Timezone",
   autoClockOutEnabled: "Automatic Out time",
+  autoAbsentEnabled: "Automatic absence",
 };
 export function describeActivity(event, employees, format = "12h") {
   let d = event.details || {};

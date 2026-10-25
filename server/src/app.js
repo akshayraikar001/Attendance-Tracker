@@ -8,12 +8,17 @@ import { registerAdminRoutes } from "./controllers/admin.js";
 import { registerWhatsApp } from "./controllers/whatsapp.js";
 import { registerLeave } from "./controllers/leave.js";
 import { registerWorkspaceRoutes } from "./controllers/workspace.js";
+import { registerEmployeeAccess } from "./controllers/employee-access.js";
+import { registerLocations } from "./controllers/locations.js";
 const app = express();
 app.disable("x-powered-by");
+app.use("/api/me/locations", express.json({ limit: "1500kb" }));
 app.use(express.json({ limit: "100kb" }));
 const wrap = (fn) => (req, res, next) =>
   Promise.resolve(fn(req, res, next)).catch(next);
 registerAuth({ app, wrap, transaction, audit, query });
+registerEmployeeAccess({ app, wrap, transaction, audit, query });
+registerLocations({ app, wrap, transaction, audit, query });
 registerAdminRoutes({ app, wrap, transaction, audit, query });
 const whatsapp = registerWhatsApp({ app, wrap, transaction, audit, query });
 registerLeave({ app, wrap, transaction, audit, query, whatsapp });

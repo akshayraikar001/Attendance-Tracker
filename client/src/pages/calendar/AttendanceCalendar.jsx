@@ -475,14 +475,16 @@ export default function AttendanceCalendar({
                     </span>
                   </td>
                   <td data-label="Action" className="calendar-edit-cell">
-                    <button
-                      className="button"
-                      disabled={e.status !== "Active"}
-                      aria-label={`Edit attendance for ${e.name}`}
-                      onClick={() => onEdit({ employeeId: e.id, date })}
-                    >
-                      {entry ? "Edit" : "Record"}
-                    </button>
+                    {onEdit && (
+                      <button
+                        className="button"
+                        disabled={e.status !== "Active"}
+                        aria-label={`Edit attendance for ${e.name}`}
+                        onClick={() => onEdit({ employeeId: e.id, date })}
+                      >
+                        {entry ? "Edit" : "Record"}
+                      </button>
+                    )}
                   </td>
                 </tr>
               ))}

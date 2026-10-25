@@ -9,11 +9,11 @@ const entries = [
     date: "2026-10-01",
     name: "वैष्णवी, José",
     department: "Sales",
-    mode: "time",
+    mode: "manual",
     inTime: "09:30",
     outTime: "17:43",
     workedMinutes: 433,
-    status: "Present",
+    status: "Half day",
     overtimeMinutes: 30,
     lateMinutes: 0,
     earlyMinutes: 77,
@@ -130,4 +130,21 @@ const serial =
 assert.ok(Math.abs(serial * 1440 - 1180) < 0.00001);
 console.log(
   "PASS: Monthly Excel preserves daily statuses, neutral Sundays, Sunday attendance, Unicode names and measured totals.",
+);
+
+assert.equal(sheet.getCell("AL1").value, "Daily working avg");
+assert.equal(sheet.getCell("AL2").numFmt, "[h]:mm");
+const avgCell = sheet.getCell("AL2").value;
+const avgSerial =
+  avgCell instanceof Date ? avgCell.getTime() / 86400000 + 25569 : avgCell;
+assert.ok(Math.abs(avgSerial * 1440 - 1180 / 3) < 0.0001);
+assert.equal(report.people[0].averageMinutes, 1180 / 3);
+const emptyAverage = monthlyData({
+  month: "2026-10",
+  employees: [{ id: 1, status: "Active" }],
+  records: [{ employeeId: 1, date: "2026-10-01", status: "Absent" }],
+}).people[0];
+assert.equal(emptyAverage.averageMinutes, null);
+console.log(
+  "PASS: monthly average divides measured total by Present + Half days, excludes absences from divisor and leaves zero-day average blank.",
 );

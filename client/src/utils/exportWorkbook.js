@@ -172,6 +172,7 @@ export async function buildMonthlyWorkbook(report, month) {
     { header: "Absent", key: "absent", width: 12 },
     { header: "Half day", key: "half", width: 12 },
     { header: "Total hours", key: "total", width: 16 },
+    { header: "Daily working avg", key: "average", width: 22 },
   ];
   const colors = {
     Present: ["DCFCE7", "166534"],
@@ -190,9 +191,12 @@ export async function buildMonthlyWorkbook(report, month) {
       absent: person.counts.Absent,
       half: person.counts["Half day"],
       total: person.totalMinutes / 1440,
+      average:
+        person.averageMinutes == null ? null : person.averageMinutes / 1440,
     });
     row.height = 42;
     row.getCell("total").numFmt = "[h]:mm";
+    row.getCell("average").numFmt = "[h]:mm";
     for (const entry of person.entries) {
       const cell = row.getCell(entry.date);
       cell.value =
