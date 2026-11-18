@@ -1,13 +1,15 @@
+import {
+  connectTestAdmin,
+  testDatabaseHost,
+  testDatabasePort,
+} from "../helpers/database.mjs";
 // Integration check against an isolated database on the optional local MariaDB.
 import assert from "node:assert/strict";
 import mysql from "mysql2/promise";
 import { spawn, spawnSync } from "node:child_process";
 import { createServer } from "node:net";
 import { once } from "node:events";
-const admin = await mysql.createConnection({
-  socketPath: process.cwd() + "/.local/mysql.sock",
-  user: "root",
-});
+const admin = await connectTestAdmin();
 const database = "attendance_admin_test_" + Date.now();
 const listener = createServer();
 await new Promise((resolve) => listener.listen(0, "127.0.0.1", resolve));
@@ -17,8 +19,8 @@ const env = {
   ...process.env,
   DB_LOCAL_MANAGED: "false",
   CHATERY_MANAGED_PATH: "",
-  DB_HOST: "127.0.0.1",
-  DB_PORT: "3307",
+  DB_HOST: testDatabaseHost,
+  DB_PORT: String(testDatabasePort),
   DB_NAME: database,
   DB_USER: "attendance",
   DB_PASSWORD: "attendance_dev",
@@ -478,11 +480,124 @@ try {
     (await api("/employees")).find((e) => e.id === second.id).role,
     "Sales Associate",
   );
-  assert.ok(
-    (await api("/audit")).some((e) => e.action === "Bulk attendance recorded"),
-  );
+  assert.deepEqual(await api("/audit"), []);
   console.log(
     "PASS: bulk preview, guarded apply, stale-preview rejection, overwrite opt-in, weekly/custom holiday skipping, Sunday work, ranges, department/role renames, timing preservation and empty-item removal.",
+  );
+
+  const fixEmployee = await api(
+    "/employees",
+    { name: "Bulk Fix Example", department: "Sales", role: "Staff" },
+    "POST",
+    201,
+  );
+  const fixDate = "2026-11-12";
+  const fixedPayload = {
+    employeeIds: [fixEmployee.id],
+    from: fixDate,
+    to: fixDate,
+    skipHolidays: false,
+    entryMode: "time",
+    inTime: "10:00",
+    outTime: "19:00",
+  };
+  await api(
+    "/attendance",
+    {
+      employeeId: fixEmployee.id,
+      date: fixDate,
+      mode: "time",
+      inTime: "09:30",
+      outTime: null,
+    },
+    "POST",
+  );
+  const fixPreview = await api(
+    "/attendance/bulk-attendance/preview",
+    fixedPayload,
+    "POST",
+  );
+  assert.equal(fixPreview.sample[0].inTime, "09:30");
+  await api(
+    "/attendance/bulk-attendance",
+    { ...fixedPayload, previewToken: fixPreview.previewToken },
+    "POST",
+  );
+  let fixRow = (await api("/attendance")).find(
+    (r) => r.employeeId === fixEmployee.id && r.date === fixDate,
+  );
+  assert.equal(fixRow.inTime, "09:30");
+  assert.equal(fixRow.outTime, "19:00");
+  const invalidPayload = {
+    ...fixedPayload,
+    from: "2026-11-11",
+    to: "2026-11-11",
+    inTime: null,
+  };
+  const invalidPreview = await api(
+    "/attendance/bulk-attendance/preview",
+    invalidPayload,
+    "POST",
+    400,
+  );
+  assert.match(invalidPreview.error, /Add In time before entering Out time/);
+  await api("/attendance/bulk-attendance", invalidPayload, "POST", 400);
+  assert.equal(
+    (await api("/attendance")).some(
+      (r) => r.employeeId === fixEmployee.id && r.date === "2026-11-11",
+    ),
+    false,
+  );
+  await api(
+    "/attendance",
+    {
+      employeeId: fixEmployee.id,
+      date: fixDate,
+      mode: "time",
+      inTime: "22:00",
+      outTime: "06:00",
+      overnight: true,
+    },
+    "POST",
+  );
+  const overnightPayload = {
+    ...fixedPayload,
+    entryMode: "status",
+    inTime: null,
+    outTime: null,
+    status: "Half day",
+    overwrite: true,
+  };
+  const overnightPreview = await api(
+    "/attendance/bulk-attendance/preview",
+    overnightPayload,
+    "POST",
+  );
+  await api(
+    "/attendance/bulk-attendance",
+    { ...overnightPayload, previewToken: overnightPreview.previewToken },
+    "POST",
+  );
+  fixRow = (await api("/attendance")).find(
+    (r) => r.employeeId === fixEmployee.id && r.date === fixDate,
+  );
+  assert.equal(fixRow.status, "Half day");
+  assert.equal(Number(fixRow.overnight), 1);
+  assert.equal(fixRow.inTime, "22:00");
+  assert.equal(fixRow.outTime, "06:00");
+  await admin.query(
+    `INSERT INTO \`${database}\`.attendance (employeeId,date,mode,inTime,outTime,status,rules) VALUES (?,'2026-11-11','time',NULL,'19:00','Present',?)`,
+    [fixEmployee.id, JSON.stringify(await api("/settings"))],
+  );
+  await api("/settings", { ...(await api("/settings")), timeFormat: "24h" });
+  assert.equal((await api("/settings")).timeFormat, "24h");
+  const legacy = (await api("/attendance")).find(
+    (r) => r.employeeId === fixEmployee.id && r.date === "2026-11-11",
+  );
+  assert.equal(legacy.inTime, null);
+  assert.equal(legacy.outTime, "19:00");
+  console.log(
+    "PASS: bulk field protection, Out-only preview/apply blocking, overnight status changes and settings save with legacy incomplete attendance.",
   );
 } finally {
   if (child && child.exitCode === null) {

@@ -30,13 +30,6 @@ function CatalogEditor({ kind, items, api, onReload }) {
           <h2>
             {kind === "departments" ? "Departments & groups" : "Employee roles"}
           </h2>
-          <p>
-            Rename updates every assigned employee
-            {kind === "departments"
-              ? " and carries group timings to the new name"
-              : ""}
-            . Empty items can be removed.
-          </p>
         </div>
       </div>
       <form
@@ -169,10 +162,6 @@ function CalendarSettings({ rules, holidays, onSave, api, onReload, saving }) {
       <div className="card-heading">
         <div>
           <h2>Weekly holidays</h2>
-          <p>
-            Unrecorded holiday dates stay neutral. You can still record
-            attendance on any holiday.
-          </p>
         </div>
       </div>
       <form
@@ -207,7 +196,6 @@ function CalendarSettings({ rules, holidays, onSave, api, onReload, saving }) {
       <div className="card-heading">
         <div>
           <h2>Named holidays</h2>
-          <p>Add or edit a specific holiday date.</p>
         </div>
       </div>
       <form
@@ -295,9 +283,76 @@ export default function WorkspaceSettings({
           />
           Use AM/PM (12-hour time)
         </label>
-        <p>
-          Applies to screens, time entry, and printed reports. Turn off for
-          24-hour time. Excel exports keep their existing format.
+      </section>
+      <section className="card time-format-settings">
+        <h2>Report settings</h2>
+        <label className="checkbox">
+          <input
+            type="checkbox"
+            role="switch"
+            checked={rules.showDailyWorkingAverage ?? true}
+            disabled={saving}
+            onChange={(e) =>
+              onSave({ ...rules, showDailyWorkingAverage: e.target.checked })
+            }
+          />
+          Show daily working average in reports and Excel
+        </label>
+        <label className="checkbox">
+          <input
+            type="checkbox"
+            checked={
+              rules.printDailyWorkingAverage ??
+              rules.showDailyWorkingAverage ??
+              true
+            }
+            disabled={saving}
+            onChange={(e) =>
+              onSave({ ...rules, printDailyWorkingAverage: e.target.checked })
+            }
+          />
+          Show daily working average in print
+        </label>
+        <label className="checkbox">
+          <input
+            type="checkbox"
+            checked={rules.averageIncludeHalfDays ?? false}
+            disabled={saving}
+            onChange={(e) =>
+              onSave({
+                ...rules,
+                averageIncludeHalfDays: e.target.checked,
+                averageIncludeHalfDayOvertime: e.target.checked
+                  ? false
+                  : (rules.averageIncludeHalfDayOvertime ?? false),
+              })
+            }
+          />
+          Consider half-day Out times in daily working average
+        </label>
+        <label className="checkbox">
+          <input
+            type="checkbox"
+            checked={rules.averageIncludeHalfDayOvertime ?? false}
+            disabled={saving}
+            onChange={(e) =>
+              onSave({
+                ...rules,
+                averageIncludeHalfDayOvertime: e.target.checked,
+                averageIncludeHalfDays: e.target.checked
+                  ? false
+                  : (rules.averageIncludeHalfDays ?? false),
+              })
+            }
+          />
+          Include half-day overtime in daily working average
+        </label>
+        <p className="muted">
+          Adds only hours above the half-day minimum to Present-day hours, then
+          divides by measured Present days. For example, 6 hours worked with a
+          4.5-hour half-day minimum adds 1.5 hours. Choose either all half-day
+          hours or only half-day overtime. With no measured Present days, the
+          average stays blank.
         </p>
       </section>
       <div className="tabs">

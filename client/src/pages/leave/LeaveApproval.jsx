@@ -184,6 +184,7 @@ export default function LeaveApproval({
           <option value="pending">Pending</option>
           <option value="approved">Approved</option>
           <option value="rejected">Rejected</option>
+          <option value="reviewed">Already reviewed</option>
           <option value="all">All requests</option>
         </select>
       </label>
@@ -196,7 +197,11 @@ export default function LeaveApproval({
                   request.senderName ||
                   "Unknown employee"}
               </strong>
-              <span className="badge">{request.state}</span>
+              <span className="badge">
+                {request.state === "reviewed"
+                  ? "Already reviewed"
+                  : request.state}
+              </span>
             </div>
             <small>
               {request.senderId} ·{" "}
@@ -215,6 +220,39 @@ export default function LeaveApproval({
                 ? `${request.fromDate} → ${request.toDate}`
                 : "Dates need review"}
             </p>
+            {request.state === "reviewed" && (
+              <button
+                type="button"
+                className="button"
+                disabled={busy}
+                onClick={() =>
+                  action(async () => {
+                    await api(`/leave/${request.id}/pending`, {});
+                    setReview(null);
+                    setNotice("Moved to pending. Attendance has not changed.");
+                  })
+                }
+              >
+                Move to pending
+              </button>
+            )}
+            {request.state === "pending" && (
+              <button
+                type="button"
+                className="button"
+                disabled={busy}
+                title="Already entered manually. Dismiss without changing attendance."
+                onClick={() =>
+                  action(async () => {
+                    await api(`/leave/${request.id}/reviewed`, {});
+                    setReview(null);
+                    setNotice("Already reviewed. Attendance has not changed.");
+                  })
+                }
+              >
+                Already reviewed
+              </button>
+            )}
             {request.state === "pending" && review?.id !== request.id && (
               <button
                 className="button"

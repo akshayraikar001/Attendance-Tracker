@@ -19,6 +19,23 @@ export function localMessageTime(timestamp, timeZone) {
     time: `${parts.hour}:${parts.minute}`,
   };
 }
+export function dayBounds(date, zone) {
+  const midnight = Date.parse(date + "T00:00:00Z") / 1000;
+  const boundary = (target) => {
+    let low = midnight - 36 * 3600,
+      high = midnight + 60 * 3600;
+    while (low < high) {
+      const mid = Math.floor((low + high) / 2);
+      if (localMessageTime(mid, zone).date < target) low = mid + 1;
+      else high = mid;
+    }
+    return low;
+  };
+  return [
+    boundary(date),
+    boundary(new Date((midnight + 86400) * 1000).toISOString().slice(0, 10)),
+  ];
+}
 export function senderIdentity(message) {
   // Only author fields can identify an employee; never use a group address,
   // a quoted author, or a bare numeric LID as a phone number.

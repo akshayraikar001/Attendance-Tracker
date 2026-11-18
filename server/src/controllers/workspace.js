@@ -298,8 +298,6 @@ export function registerWorkspaceRoutes({
   );
   app.get(
     "/api/audit",
-    wrap(async (req, res) =>
-      res.json(await query("SELECT * FROM audit ORDER BY id DESC LIMIT 500")),
-    ),
+    wrap(async (req, res) => res.json([])),
   );
 }

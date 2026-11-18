@@ -3,6 +3,13 @@ import { defaults, calculate } from "../services/rules.js";
 await query(
   `CREATE TABLE IF NOT EXISTS employees (id INT AUTO_INCREMENT PRIMARY KEY,name VARCHAR(100) NOT NULL,email VARCHAR(160) NULL UNIQUE,department VARCHAR(80) NOT NULL,role VARCHAR(100) NOT NULL,status VARCHAR(16) NOT NULL DEFAULT 'Active',createdAt TIMESTAMP DEFAULT CURRENT_TIMESTAMP)`,
 );
+await query(`CREATE TABLE IF NOT EXISTS employee_report_sends (
+ employeeId INT NOT NULL, month CHAR(7) NOT NULL, format VARCHAR(8) NOT NULL, detail VARCHAR(16) NOT NULL,
+ state VARCHAR(16) NOT NULL, attemptId CHAR(36) NOT NULL, phone VARCHAR(16) NOT NULL,
+ filename VARCHAR(255) NOT NULL, messageId VARCHAR(200) NULL, sentAt DATETIME NULL,
+ updatedAt DATETIME NOT NULL, error VARCHAR(500) NULL,
+ PRIMARY KEY(employeeId,month,format,detail), FOREIGN KEY(employeeId) REFERENCES employees(id)
+)`);
 // Upgrade existing installations without changing employee data.
 const [emailColumn] = await query(
   "SELECT IS_NULLABLE FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='employees' AND COLUMN_NAME='email'",
@@ -140,12 +147,34 @@ await query("INSERT IGNORE INTO whatsapp_config (id,config) VALUES (1,?)", [
     since: 0,
   }),
 ]);
+await query(`CREATE TABLE IF NOT EXISTS whatsapp_group_messages (
+  id CHAR(64) PRIMARY KEY, sessionId VARCHAR(80) NOT NULL, groupId VARCHAR(160) NOT NULL,
+  timestamp BIGINT NOT NULL, message JSON NOT NULL, clearedAt DATETIME NULL,
+  INDEX source_time(sessionId,groupId,timestamp)
+)`);
+await query(`CREATE TABLE IF NOT EXISTS whatsapp_group_scans (
+  id CHAR(64) PRIMARY KEY, version INT NOT NULL DEFAULT 0, pageCursor VARCHAR(160) NULL,
+  state VARCHAR(20) NOT NULL DEFAULT 'idle', scanned INT NOT NULL DEFAULT 0
+)`);
 await query(
   `CREATE TABLE IF NOT EXISTS whatsapp_links (identity VARCHAR(160) PRIMARY KEY,employeeId INT NOT NULL,FOREIGN KEY(employeeId) REFERENCES employees(id))`,
 );
 await query(
   `CREATE TABLE IF NOT EXISTS whatsapp_events (id CHAR(64) PRIMARY KEY,sessionId VARCHAR(80) NOT NULL,groupId VARCHAR(160) NOT NULL,messageId VARCHAR(160) NOT NULL,senderId VARCHAR(160) NOT NULL,senderName VARCHAR(200) NOT NULL,text TEXT NOT NULL,timestamp BIGINT NOT NULL,employeeId INT NULL,date DATE NULL,state VARCHAR(20) NOT NULL,reason VARCHAR(500) NOT NULL,createdAt TIMESTAMP DEFAULT CURRENT_TIMESTAMP,INDEX(state),INDEX(timestamp))`,
 );
+for (const [name, definition] of [
+  ["isEdited", "BOOLEAN NOT NULL DEFAULT 0"],
+  ["manualOnly", "BOOLEAN NOT NULL DEFAULT 0"],
+  ["previousText", "TEXT NULL"],
+  ["correction", "JSON NULL"],
+]) {
+  const columns = await query(
+    "SELECT COLUMN_NAME FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='whatsapp_events' AND COLUMN_NAME=?",
+    [name],
+  );
+  if (!columns.length)
+    await query(`ALTER TABLE whatsapp_events ADD COLUMN ${name} ${definition}`);
+}
 const clearedColumn = await query(
   "SELECT COLUMN_NAME FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='whatsapp_events' AND COLUMN_NAME='clearedAt'",
 );

@@ -19,10 +19,11 @@ Object.defineProperty(globalThis, "navigator", {
   configurable: true,
 });
 globalThis.IS_REACT_ACT_ENVIRONMENT = true;
-const { render, screen, fireEvent, cleanup, waitFor } =
+const { render, screen, fireEvent, cleanup, waitFor, within } =
   await import("@testing-library/react");
 const React = await import("react");
 const calls = [];
+let groupCleared = false;
 let state = {
   config: {
     enabled: false,
@@ -40,6 +41,61 @@ let state = {
 };
 const api = async (path, body, method) => {
   calls.push({ path, body, method });
+  if (path === "/whatsapp/group-messages/scan")
+    return api(
+      "/whatsapp/group-messages?" +
+        new URLSearchParams(body.date ? { date: body.date } : {}),
+    );
+  if (path === "/whatsapp/group-messages" && method === "DELETE") {
+    groupCleared = true;
+    return { ok: true };
+  }
+  if (path.startsWith("/whatsapp/group-messages?")) {
+    const params = new URL(path, "http://localhost").searchParams;
+    const date = params.get("date") || "2026-11-07";
+    const offset = Number(params.get("offset") || 0);
+    if (groupCleared && params.get("history") !== "archived")
+      return {
+        days: [],
+        messages: [],
+        hasMore: false,
+        source: { sessionId: "test", groupId: "123@g.us" },
+        scan: { state: "cleared", scanned: 101 },
+      };
+    return {
+      days: [
+        { date: "2026-11-07", count: 101 },
+        { date: "2026-11-06", count: 1 },
+      ],
+      source: { sessionId: "test", groupId: "123@g.us" },
+      scan: { state: "complete", scanned: 101 },
+      messages:
+        date === "2026-11-06"
+          ? [
+              {
+                id: "older",
+                content: "Yesterday group note",
+                type: "text",
+                timestamp: 1793923200,
+              },
+            ]
+          : Array.from({ length: offset ? 1 : 100 }, (_, i) => ({
+              id: "group-" + (offset + i),
+              content: "Group note " + (offset + i),
+              type: "text",
+              timestamp: 1794009600,
+            })),
+      hasMore: date === "2026-11-07" && offset === 0,
+    };
+  }
+  if (path === "/whatsapp/group-messages/select")
+    return {
+      id: "selected-event",
+      text: "Yesterday group note",
+      state: "review",
+      employeeId: 1,
+      timestamp: 1793923200,
+    };
   if (path === "/whatsapp") return structuredClone(state);
   if (path === "/whatsapp?history=archived")
     return {
@@ -88,9 +144,16 @@ const api = async (path, body, method) => {
     state.config = { ...body };
     return { ok: true };
   }
+  if (path === "/whatsapp/sync/clear") {
+    state.config.syncProgress = null;
+    state.config.resumeFromCache = true;
+    return { ok: true };
+  }
   if (path === "/whatsapp/sync")
     return { lastSync: new Date().toISOString(), error: null };
   if (path === "/whatsapp/links") return { ok: true };
+  if (path === "/whatsapp/approve")
+    return { state: "applied", reason: "In time recorded." };
   if (path === "/whatsapp/retry") {
     state.events[0] = {
       ...state.events[0],
@@ -328,11 +391,198 @@ try {
     calls.filter((c) => c.path === "/whatsapp/sync").at(-1).body,
     { all: true },
   );
+  const syncCallsBeforeClear = calls.filter(
+    (c) => c.path === "/whatsapp/sync",
+  ).length;
+  fireEvent.click(screen.getByRole("button", { name: "Clear stuck sync" }));
+  await waitFor(() => assert.ok(screen.getByText(/Sync cleared/)));
+  assert.equal(
+    calls.filter((c) => c.path === "/whatsapp/sync/clear").length,
+    1,
+  );
+  assert.equal(
+    calls.filter((c) => c.path === "/whatsapp/sync").length,
+    syncCallsBeforeClear,
+  );
+  await waitFor(() =>
+    assert.equal(
+      screen.getByRole("button", { name: "Sync latest messages" }).disabled,
+      false,
+    ),
+  );
+  fireEvent.click(screen.getByRole("button", { name: "Sync latest messages" }));
+  await waitFor(() =>
+    assert.equal(
+      calls.filter((c) => c.path === "/whatsapp/sync").length,
+      syncCallsBeforeClear + 1,
+    ),
+  );
   console.log(
     "PASS: daily collapse defaults, full history pagination, bulk day sync/clear, and sync all controls.",
   );
   console.log(
     "PASS: QR pairing, group/timezone selection, saved sync controls, manual sync, progress display, sender mapping and unresolved sender recovery.",
+  );
+
+  cleanup();
+  state.config.allowEditedMessages = false;
+  state.config.timeZone = "UTC";
+  state.events = [
+    {
+      id: "edited-review",
+      text: "IN wrong",
+      isEdited: 1,
+      senderId: "phone:919000000001",
+      employeeId: 1,
+      state: "review",
+      timestamp: Math.floor(Date.now() / 1000),
+      reason: "Edited messages disabled.",
+    },
+  ];
+  delete state.days;
+  render(
+    React.createElement(Settings, {
+      api,
+      employees: [{ id: 1, name: "Test Person", status: "Active" }],
+    }),
+  );
+  await screen.findByText("Edited");
+  assert.equal(
+    screen.getByRole("button", { name: "Edit entry" }).disabled,
+    true,
+  );
+  assert.equal(
+    screen.getByRole("button", { name: "Approve / overwrite" }).disabled,
+    true,
+  );
+  fireEvent.click(screen.getByLabelText("Allow edited messages"));
+  fireEvent.click(
+    screen.getByRole("button", { name: "Save WhatsApp settings" }),
+  );
+  await waitFor(() =>
+    assert.equal(
+      screen.getByRole("button", { name: "Edit entry" }).disabled,
+      false,
+    ),
+  );
+  fireEvent.click(screen.getByRole("button", { name: "Edit entry" }));
+  const dialog = screen.getByRole("dialog", { name: "Edit attendance entry" });
+  fireEvent.change(within(dialog).getByLabelText("Time"), {
+    target: { value: "10:45" },
+  });
+  fireEvent.click(
+    within(dialog).getByRole("button", { name: "Approve entry" }),
+  );
+  await waitFor(() => assert.equal(screen.queryByRole("dialog"), null));
+  const approval = calls
+    .filter((c) => c.path === "/whatsapp/approve")
+    .at(-1).body;
+  assert.equal(approval.overwrite, false);
+  assert.equal(approval.correction.time, "10:45");
+  assert.equal(approval.correction.expectedText, "IN wrong");
+  assert.equal(approval.correction.employeeId, 1);
+  console.log(
+    "PASS: edited-message opt-in and manual correction dialog approval.",
+  );
+  cleanup();
+  state.config.allowEditedMessages = false;
+  state.events = [
+    {
+      id: "error-review",
+      text: "IN wrong",
+      senderId: "unresolved",
+      state: "review",
+      reason: "Invalid time.",
+      timestamp: Math.floor(Date.now() / 1000),
+    },
+  ];
+  render(
+    React.createElement(Settings, {
+      api,
+      employees: [{ id: 1, name: "Test Person", status: "Active" }],
+    }),
+  );
+  await screen.findByText("IN wrong");
+  const beforeCorrection = calls.filter(
+    (c) => c.path === "/whatsapp/approve",
+  ).length;
+  fireEvent.click(screen.getByRole("button", { name: "Edit entry" }));
+  const errorDialog = screen.getByRole("dialog");
+  fireEvent.change(within(errorDialog).getByLabelText("Employee"), {
+    target: { value: "1" },
+  });
+  fireEvent.change(within(errorDialog).getByLabelText("Time"), {
+    target: { value: "09:15" },
+  });
+  assert.equal(
+    calls.filter((c) => c.path === "/whatsapp/approve").length,
+    beforeCorrection,
+  );
+  fireEvent.click(
+    within(errorDialog).getByRole("button", { name: "Approve entry" }),
+  );
+  await waitFor(() => assert.equal(screen.queryByRole("dialog"), null));
+  const fixed = calls.filter((c) => c.path === "/whatsapp/approve").at(-1).body;
+  assert.equal(fixed.correction.employeeId, 1);
+  assert.equal(fixed.correction.time, "09:15");
+  assert.equal(fixed.correction.expectedText, "IN wrong");
+  console.log(
+    "PASS: unresolved error entry stays visible and supports explicit correction approval.",
+  );
+
+  fireEvent.click(screen.getByRole("button", { name: "All group messages" }));
+  await screen.findByText("Group note 0");
+  fireEvent.click(screen.getByRole("button", { name: "Load more messages" }));
+  await screen.findByText("Group note 100");
+  fireEvent.change(screen.getByLabelText("Available message days"), {
+    target: { value: "2026-11-06" },
+  });
+  await screen.findByText("Yesterday group note");
+  assert.equal(screen.queryByText("Group note 0"), null);
+  const syncCount = calls.filter((c) => c.path === "/whatsapp/sync").length;
+  fireEvent.click(screen.getByRole("button", { name: "Fetch all messages" }));
+  await waitFor(() =>
+    assert.ok(calls.some((c) => c.path === "/whatsapp/group-messages/scan")),
+  );
+  await waitFor(() =>
+    assert.equal(screen.queryByRole("button", { name: "Pause scan" }), null),
+  );
+  assert.equal(
+    calls.filter((c) => c.path === "/whatsapp/sync").length,
+    syncCount,
+  );
+  assert.ok(screen.getByRole("columnheader", { name: "In time" }));
+  assert.ok(screen.getByRole("columnheader", { name: "Out time" }));
+  fireEvent.click(screen.getByRole("button", { name: "Clear day" }));
+  await screen.findByText("No messages.");
+  const cleared = calls
+    .filter(
+      (c) => c.path === "/whatsapp/group-messages" && c.method === "DELETE",
+    )
+    .at(-1).body;
+  assert.equal(cleared.date, "2026-11-06");
+  fireEvent.click(screen.getByLabelText("Show cleared group messages"));
+  await screen.findByText("Yesterday group note");
+  const beforeSelection = calls.filter(
+    (c) => c.path === "/whatsapp/approve",
+  ).length;
+  fireEvent.click(screen.getByRole("button", { name: "Select for review" }));
+  await screen.findByRole("dialog", { name: "Edit attendance entry" });
+  assert.equal(
+    calls.filter((c) => c.path === "/whatsapp/approve").length,
+    beforeSelection,
+  );
+  assert.deepEqual(
+    calls.filter((c) => c.path === "/whatsapp/group-messages/select").at(-1)
+      .body,
+    {
+      messageId: "older",
+      sessionId: "test",
+      groupId: "123@g.us",
+    },
+  );
+  console.log(
+    "PASS: group browser date switching, pagination and selection without automatic approval.",
   );
 } finally {
   cleanup();

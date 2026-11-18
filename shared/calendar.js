@@ -46,3 +46,12 @@ export function shiftDateRange(from, to, direction) {
   const amount = (daysBetween(from, to) + 1) * direction;
   return { from: addDays(from, amount), to: addDays(to, amount) };
 }
+
+// Holidays neutralize absence without changing the saved attendance record.
+export function holidayAdjustedRecords(records, holidays = [], weeklyOffDays = [0]) {
+  return records.map((record) =>
+    record.status === "Absent" && holidayForDate(record.date, holidays, weeklyOffDays)
+      ? { ...record, status: "Holiday" }
+      : record,
+  );
+}

@@ -2,6 +2,10 @@
 
 Start with the [installation guide](../README.md). Run commands from the repository root. `npm ci` installs both npm workspaces using the committed lockfile. `npm run dev` starts the API and Vite together; `npm run build && npm start` serves the built frontend through Express.
 
+## Complete commit check
+
+Run `npm run check` from the repository root. It runs all unit, UI, export and isolated database suites, then the production build; it stops on the first failure. `npm run check -- --list` lists the included checks. Use the test database connection below. It does not run the two live-workspace diagnostics or contact Keycloak/WhatsApp accounts.
+
 ## Fast checks (no live WhatsApp account required)
 
 ```bash
@@ -23,7 +27,9 @@ npm run build
 
 ## Database integration tests
 
-These tests currently require the project's **optional Linux MariaDB helper**: root access through `.local/mysql.sock`, database port **3307**, and the development application user from `server/database.sql`. They do not automatically use your Docker database or `.env` database. Do not point test code at production.
+These tests use an isolated test schema on the local MariaDB server, with the development application user from `server/database.sql`. The shared `tests/helpers/database.mjs` connects as root through `.local/mysql.sock` when present; otherwise it uses **127.0.0.1:3307**. They never select the application database from `.env`. Each suite creates and removes only its own `attendance_*_test_*` database. Do not point test code at production.
+
+Optional test-only connection settings: `TEST_DB_HOST` and `TEST_DB_PORT` select TCP; `TEST_DB_SOCKET` explicitly selects an admin socket. `TEST_DB_ADMIN_USER` and `TEST_DB_ADMIN_PASSWORD` configure the test administrator. Keep passwords out of Git. The application fixture still uses the development `attendance` account from `server/database.sql`. An already-running local database can be reused; there is no need to start another server.
 
 Install MariaDB server/client tools (`mariadbd`, `mariadb-install-db`, `mysqladmin`, `mysql`), then:
 
@@ -35,6 +41,7 @@ npm run test:holidays
 npm run test:whatsapp
 npm run test:leave
 npm run test:automation
+npm run test:employee-reports
 ```
 
 These suites create temporary test databases and remove them when finished. WhatsApp/leave tests use simulated Chatery responses, not real group messages. They cover sync pagination, offline catch-up, deduplication, manual overwrite, disabled auto-approval, group switching, leave conflicts, permissions, resets and automatic Out time boundaries.
@@ -52,3 +59,10 @@ For running the actual application with the local helper, set `DB_PORT=3307` in 
 5. Check manual attendance and the WhatsApp connection, selected group and saved options.
 
 The restructure changes source locations, not public API routes, npm startup commands or table names. Custom scripts that imported the old `server/src/*.js` files directly must use their new paths; consult [architecture](ARCHITECTURE.md).
+
+## Monthly employee report delivery
+
+- `npm run test:employee-reports`: isolated database and mock document sender; validates privacy, admin-only access, month/format selection, download generation, duplicate/concurrent sends, uncertain delivery and persisted status. Requires the same local MariaDB fixture as the other integration tests. It sends no real WhatsApp messages.
+- `npm run test:employee-reports:ui`: mocked API checks for selection, confirmation, format/detail controls, sent markers and explicit resends.
+- `npm test`: includes PDF/Excel generation, per-employee data isolation, filenames, note shortening and employee export columns.
+- `npm run db:setup`: adds the report-send tracking table without altering attendance. Restart the API after updating.

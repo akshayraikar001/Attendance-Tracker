@@ -20,6 +20,7 @@ export default function MonthlyReport({
   holidays,
   rules,
   onEdit,
+  onBulkAttendance,
 }) {
   const clock = useTimeFormatter();
   const [month, setMonth] = useState(
@@ -35,12 +36,21 @@ export default function MonthlyReport({
     holidays,
     weeklyOffDays: rules.weeklyOffDays ?? [0],
     department: group,
+    showDailyWorkingAverage: rules.showDailyWorkingAverage ?? true,
+    averageIncludeHalfDays: rules.averageIncludeHalfDays ?? false,
+    averageIncludeHalfDayOvertime: rules.averageIncludeHalfDayOvertime ?? false,
+    halfDayHours: rules.halfDayHours,
+    employeeRules: rules.employeeRules,
+    groupRules: rules.groupRules,
   });
-  async function download() {
+  const printAverage =
+    rules.printDailyWorkingAverage ?? rules.showDailyWorkingAverage ?? true;
+  const averageClass = `${report.showDailyWorkingAverage ? "" : "average-screen-hidden"} ${printAverage ? "" : "average-print-hidden"}`;
+  async function download(statusOnly = false) {
     setBusy(true);
     setError("");
     try {
-      await downloadMonthlyWorkbook(report, month);
+      await downloadMonthlyWorkbook(report, month, { statusOnly });
     } catch {
       setError("Could not export the monthly report. Please try again.");
     } finally {
@@ -52,15 +62,23 @@ export default function MonthlyReport({
       <div className="card-heading">
         <div>
           <h2>Monthly attendance · {month}</h2>
-          <p>
-            Statuses first, hours underneath. Select a day to record or edit
-            attendance.
-          </p>
         </div>
         <div className="heading-actions">
-          <button className="button" disabled={busy} onClick={download}>
+          {onBulkAttendance && (
+            <button className="button" onClick={onBulkAttendance}>
+              Bulk attendance
+            </button>
+          )}
+          <button className="button" disabled={busy} onClick={() => download()}>
             <Download size={16} />
-            {busy ? "Exporting…" : "Export Excel"}
+            {busy ? "Exporting…" : "Export with time"}
+          </button>
+          <button
+            className="button"
+            disabled={busy}
+            onClick={() => download(true)}
+          >
+            <Download size={16} /> Export P / A / H only
           </button>
           <button className="button" onClick={() => window.print()}>
             <Printer size={16} />
@@ -126,13 +144,30 @@ export default function MonthlyReport({
                   <small>{day.weekday}</small>
                 </th>
               ))}
-              <th>P</th>
-              <th>A</th>
-              <th>½</th>
-              <th>Total hours</th>
-              <th title="Total hours ÷ (Present days + Half days)">
-                Daily working avg
+              <th className="month-status-total present" title="Present days">
+                P
               </th>
+              <th className="month-status-total absent" title="Absent days">
+                A
+              </th>
+              <th className="month-status-total half-day" title="Half days">
+                ½
+              </th>
+              <th>Total hours</th>
+              {(report.showDailyWorkingAverage || printAverage) && (
+                <th
+                  className={averageClass}
+                  title={
+                    report.averageIncludeHalfDayOvertime
+                      ? "Present-day hours plus half-day hours above the half-day minimum ÷ measured Present days"
+                      : report.averageIncludeHalfDays
+                        ? "Recorded hours on Present and Half days ÷ those measured days"
+                        : "Recorded hours on Present days ÷ those measured days"
+                  }
+                >
+                  Daily working avg
+                </th>
+              )}
             </tr>
           </thead>
           <tbody>
@@ -170,15 +205,23 @@ export default function MonthlyReport({
                     </button>
                   </td>
                 ))}
-                <td className="month-total">{person.counts.Present}</td>
-                <td className="month-total">{person.counts.Absent}</td>
-                <td className="month-total">{person.counts["Half day"]}</td>
-                <td>{hours(person.totalMinutes)}</td>
-                <td>
-                  {person.averageMinutes == null
-                    ? "—"
-                    : hours(Math.round(person.averageMinutes))}
+                <td className="month-total month-status-total present">
+                  {person.counts.Present}
                 </td>
+                <td className="month-total month-status-total absent">
+                  {person.counts.Absent}
+                </td>
+                <td className="month-total month-status-total half-day">
+                  {person.counts["Half day"]}
+                </td>
+                <td>{hours(person.totalMinutes)}</td>
+                {(report.showDailyWorkingAverage || printAverage) && (
+                  <td className={averageClass}>
+                    {person.averageMinutes == null
+                      ? "—"
+                      : hours(Math.round(person.averageMinutes))}
+                  </td>
+                )}
               </tr>
             ))}
           </tbody>
@@ -187,12 +230,6 @@ export default function MonthlyReport({
           <p className="empty">No employees for this selection.</p>
         )}
       </div>
-      <p className="table-footer">
-        Daily working avg = total recorded hours ÷ (Present days + Half days).
-        Absent days are excluded from the divisor. A dash means no qualifying
-        days. Unrecorded holidays stay neutral. AT means attended for more than
-        1 minute but less than a half day.
-      </p>
     </section>
   );
 }

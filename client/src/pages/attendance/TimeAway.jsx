@@ -86,10 +86,6 @@ export default function TimeAway({ employees = [], readOnly = false }) {
       <div className="card-heading">
         <div>
           <h2>Time away</h2>
-          <p>
-            Daily departures and returns. Logged against the departure date,
-            including overnight returns. Attendance hours are unchanged.
-          </p>
         </div>
         {!readOnly && (
           <button

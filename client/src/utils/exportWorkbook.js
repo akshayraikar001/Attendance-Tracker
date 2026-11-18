@@ -1,3 +1,4 @@
+import { attendanceNotes } from "../../../shared/attendance-notes.js";
 // Excel serial values keep local wall-clock times unchanged across time zones.
 const clockValue = (time) =>
   time
@@ -14,7 +15,7 @@ const dateValue = (date) =>
     : null;
 export async function buildAttendanceWorkbook(
   records,
-  { simple = false } = {},
+  { simple = false, employeeReport = false } = {},
 ) {
   const { default: ExcelJS } = await import("exceljs");
   const book = new ExcelJS.Workbook();
@@ -22,7 +23,7 @@ export async function buildAttendanceWorkbook(
   const sheet = book.addWorksheet(simple ? "Daily report" : "Attendance", {
     views: [{ state: "frozen", ySplit: 1 }],
   });
-  const columns = simple
+  let columns = simple
     ? [
         ["Name", "name", 26],
         ["In time", "inTime", 16],
@@ -44,6 +45,10 @@ export async function buildAttendanceWorkbook(
         ["Overtime", "overtimeMinutes", 16],
         ["Notes", "notes", 40],
       ];
+  if (employeeReport)
+    columns = columns.filter(
+      ([, key]) => !["mode", "lateMinutes", "earlyMinutes"].includes(key),
+    );
   sheet.columns = columns.map(([header, key, width]) => ({
     header,
     key,
@@ -61,6 +66,7 @@ export async function buildAttendanceWorkbook(
   for (const entry of records) {
     const values = {
       ...entry,
+      notes: attendanceNotes(entry.notes),
       date: dateValue(entry.date),
       inTime: clockValue(entry.inTime),
       outTime: entry.outTime
@@ -135,9 +141,16 @@ export async function buildAttendanceWorkbook(
 }
 export async function downloadAttendanceWorkbook(
   records,
-  { filename = "dayline-attendance.xlsx", simple = false } = {},
+  {
+    filename = "dayline-attendance.xlsx",
+    simple = false,
+    employeeReport = false,
+  } = {},
 ) {
-  const book = await buildAttendanceWorkbook(records, { simple });
+  const book = await buildAttendanceWorkbook(records, {
+    simple,
+    employeeReport,
+  });
   const bytes = await book.xlsx.writeBuffer();
   const url = URL.createObjectURL(
     new Blob([bytes], {
@@ -154,7 +167,11 @@ export async function downloadAttendanceWorkbook(
   setTimeout(() => URL.revokeObjectURL(url), 10000);
 }
 
-export async function buildMonthlyWorkbook(report, month) {
+export async function buildMonthlyWorkbook(
+  report,
+  month,
+  { statusOnly = false } = {},
+) {
   const { default: ExcelJS } = await import("exceljs");
   const book = new ExcelJS.Workbook();
   const sheet = book.addWorksheet("Monthly " + month, {
@@ -171,8 +188,12 @@ export async function buildMonthlyWorkbook(report, month) {
     { header: "Present", key: "present", width: 12 },
     { header: "Absent", key: "absent", width: 12 },
     { header: "Half day", key: "half", width: 12 },
-    { header: "Total hours", key: "total", width: 16 },
-    { header: "Daily working avg", key: "average", width: 22 },
+    ...(!statusOnly
+      ? [{ header: "Total hours", key: "total", width: 16 }]
+      : []),
+    ...(!statusOnly && report.showDailyWorkingAverage !== false
+      ? [{ header: "Daily working avg", key: "average", width: 22 }]
+      : []),
   ];
   const colors = {
     Present: ["DCFCE7", "166534"],
@@ -195,15 +216,25 @@ export async function buildMonthlyWorkbook(report, month) {
         person.averageMinutes == null ? null : person.averageMinutes / 1440,
     });
     row.height = 42;
-    row.getCell("total").numFmt = "[h]:mm";
-    row.getCell("average").numFmt = "[h]:mm";
+    if (!statusOnly) row.getCell("total").numFmt = "[h]:mm";
+    if (!statusOnly && report.showDailyWorkingAverage !== false)
+      row.getCell("average").numFmt = "[h]:mm";
     for (const entry of person.entries) {
       const cell = row.getCell(entry.date);
-      cell.value =
-        entry.status +
-        (entry.workedMinutes == null
-          ? ""
-          : `\n${Math.floor(entry.workedMinutes / 60)}h ${entry.workedMinutes % 60}m`);
+      cell.value = statusOnly
+        ? {
+            Present: "P",
+            Absent: "A",
+            "Half day": "H",
+            Holiday: "Holiday",
+            Attended: "AT",
+            "In progress": "IP",
+            Unmarked: "—",
+          }[entry.status] || entry.status
+        : entry.status +
+          (entry.workedMinutes == null
+            ? ""
+            : `\n${Math.floor(entry.workedMinutes / 60)}h ${entry.workedMinutes % 60}m`);
       cell.alignment = {
         wrapText: true,
         vertical: "middle",
@@ -240,8 +271,8 @@ export async function buildMonthlyWorkbook(report, month) {
   };
   return book;
 }
-export async function downloadMonthlyWorkbook(report, month) {
-  const book = await buildMonthlyWorkbook(report, month);
+export async function downloadMonthlyWorkbook(report, month, options = {}) {
+  const book = await buildMonthlyWorkbook(report, month, options);
   const bytes = await book.xlsx.writeBuffer();
   const url = URL.createObjectURL(
     new Blob([bytes], {
@@ -250,7 +281,7 @@ export async function downloadMonthlyWorkbook(report, month) {
   );
   const a = document.createElement("a");
   a.href = url;
-  a.download = `monthly-attendance-${month}.xlsx`;
+  a.download = `monthly-attendance-${month}${options.statusOnly ? "-status-only" : ""}.xlsx`;
   document.body.appendChild(a);
   a.click();
   a.remove();

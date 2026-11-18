@@ -137,8 +137,8 @@ assert.equal(sheet.getCell("AL2").numFmt, "[h]:mm");
 const avgCell = sheet.getCell("AL2").value;
 const avgSerial =
   avgCell instanceof Date ? avgCell.getTime() / 86400000 + 25569 : avgCell;
-assert.ok(Math.abs(avgSerial * 1440 - 1180 / 3) < 0.0001);
-assert.equal(report.people[0].averageMinutes, 1180 / 3);
+assert.ok(Math.abs(avgSerial * 1440 - 470) < 0.0001);
+assert.equal(report.people[0].averageMinutes, 470);
 const emptyAverage = monthlyData({
   month: "2026-10",
   employees: [{ id: 1, status: "Active" }],
@@ -146,5 +146,39 @@ const emptyAverage = monthlyData({
 }).people[0];
 assert.equal(emptyAverage.averageMinutes, null);
 console.log(
-  "PASS: monthly average divides measured total by Present + Half days, excludes absences from divisor and leaves zero-day average blank.",
+  "PASS: monthly average excludes half-days by default and leaves zero-day average blank.",
+);
+
+const hidden = await buildMonthlyWorkbook(
+  { ...report, showDailyWorkingAverage: false },
+  "2026-10",
+);
+const loadedHidden = new ExcelJS.Workbook();
+await loadedHidden.xlsx.load(await hidden.xlsx.writeBuffer());
+assert.equal(loadedHidden.worksheets[0].columnCount, 37);
+assert.ok(
+  !loadedHidden.worksheets[0].getRow(1).values.includes("Daily working avg"),
+);
+console.log("PASS: disabling the average removes the Excel column.");
+
+const compact = await buildMonthlyWorkbook(report, "2026-10", {
+  statusOnly: true,
+});
+const compactLoaded = new ExcelJS.Workbook();
+await compactLoaded.xlsx.load(await compact.xlsx.writeBuffer());
+const compactSheet = compactLoaded.worksheets[0];
+assert.equal(compactSheet.columnCount, 36);
+assert.equal(compactSheet.getCell("C2").value, "P");
+assert.equal(compactSheet.getCell("D2").value, "H");
+assert.equal(compactSheet.getCell("E2").value, "A");
+assert.equal(compactSheet.getCell("F2").value, "Holiday");
+assert.equal(compactSheet.getCell("AH2").value, 2);
+assert.equal(compactSheet.getCell("AI2").value, 1);
+assert.equal(compactSheet.getCell("AJ2").value, 1);
+assert.equal(compactSheet.getCell("D2").fill.fgColor.argb, "FFFEF3C7");
+assert.ok(
+  !compactSheet.getRow(1).values.some((v) => /hours|avg/i.test(String(v))),
+);
+console.log(
+  "PASS: status-only export preserves colored statuses and counts without any time columns.",
 );

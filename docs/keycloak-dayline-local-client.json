@@ -1,0 +1,18 @@
+{
+  "clientId": "dayline",
+  "name": "Dayline local development",
+  "description": "Local Dayline backend login using Authorization Code with S256 PKCE.",
+  "enabled": true,
+  "protocol": "openid-connect",
+  "publicClient": false,
+  "clientAuthenticatorType": "client-secret",
+  "standardFlowEnabled": true,
+  "implicitFlowEnabled": false,
+  "directAccessGrantsEnabled": false,
+  "serviceAccountsEnabled": false,
+  "rootUrl": "http://localhost:5173",
+  "baseUrl": "http://localhost:5173/",
+  "redirectUris": ["http://localhost:5173/api/auth/keycloak/callback"],
+  "webOrigins": [],
+  "attributes": { "pkce.code.challenge.method": "S256" }
+}

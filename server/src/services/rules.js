@@ -45,6 +45,10 @@ export const ruleSchema = z
 export const settingsSchema = ruleSchema
   .and(
     z.object({
+      showDailyWorkingAverage: z.boolean().default(true),
+      printDailyWorkingAverage: z.boolean().optional(),
+      averageIncludeHalfDays: z.boolean().default(false),
+      averageIncludeHalfDayOvertime: z.boolean().default(false),
       timeFormat: z.enum(["12h", "24h"]).default("12h"),
       autoClockOutEnabled: z.boolean().default(true),
       autoClockOutCutoff: time.default("20:00"),

@@ -1,3 +1,8 @@
+import {
+  connectTestAdmin,
+  testDatabaseHost,
+  testDatabasePort,
+} from "../helpers/database.mjs";
 import assert from "node:assert/strict";
 import mysql from "mysql2/promise";
 import { spawnSync } from "node:child_process";
@@ -6,10 +11,7 @@ import {
   createWhatsAppService,
 } from "../../server/src/services/whatsapp.js";
 import { registerWhatsApp } from "../../server/src/controllers/whatsapp.js";
-const admin = await mysql.createConnection({
-  socketPath: process.cwd() + "/.local/mysql.sock",
-  user: "root",
-});
+const admin = await connectTestAdmin();
 const database = "attendance_whatsapp_test_" + Date.now();
 let pool;
 try {
@@ -21,8 +23,8 @@ try {
     encoding: "utf8",
     env: {
       ...process.env,
-      DB_HOST: "127.0.0.1",
-      DB_PORT: "3307",
+      DB_HOST: testDatabaseHost,
+      DB_PORT: String(testDatabasePort),
       DB_NAME: database,
       DB_USER: "attendance",
       DB_PASSWORD: "attendance_dev",
@@ -30,8 +32,8 @@ try {
   });
   assert.equal(setup.status, 0, setup.stderr);
   pool = mysql.createPool({
-    host: "127.0.0.1",
-    port: 3307,
+    host: testDatabaseHost,
+    port: testDatabasePort,
     user: "attendance",
     password: "attendance_dev",
     database,
@@ -498,6 +500,201 @@ try {
   assert.equal(pendingEvents.length, 300);
   assert.ok(pendingEvents.every((e) => e.state === "review"));
   assert.equal((await readManualDay()).inTime, "10:31");
+  {
+    // Clearing a stuck job preserves attendance, queued messages and checkpoints,
+    // survives service recreation, and waits for the user's cache-only sync.
+    await resetSync({
+      groupHistoryVersion: 1,
+      checkedThrough: t - 100,
+      syncProgress: {
+        phase: "fetch",
+        cursor: "stuck",
+        waitingForHistory: true,
+      },
+    });
+    const preservedAttendance = await query(
+      "SELECT * FROM attendance ORDER BY id",
+    );
+    const preservedEvents = await query(
+      "SELECT * FROM whatsapp_events ORDER BY id",
+    );
+    const queuedMessage = msg("clear-preserved", "IN 10:00", 1);
+    await query(
+      "INSERT INTO whatsapp_sync_queue (id,timestamp,message) VALUES (?,?,?)",
+      [
+        "clear-preserved",
+        queuedMessage.timestamp,
+        JSON.stringify(queuedMessage),
+      ],
+    );
+    const beforeClear = await queued.config();
+    await queued.clearStuckSync();
+    const cleared = await queued.config();
+    assert.equal(cleared.syncProgress, null);
+    assert.equal(cleared.resumeFromCache, true);
+    assert.ok(cleared.revision > (beforeClear.revision || 0));
+    assert.equal(cleared.checkedThrough, beforeClear.checkedThrough);
+    assert.deepEqual(
+      await query("SELECT * FROM attendance ORDER BY id"),
+      preservedAttendance,
+    );
+    assert.deepEqual(
+      await query("SELECT * FROM whatsapp_events ORDER BY id"),
+      preservedEvents,
+    );
+    assert.equal(
+      Number((await query("SELECT COUNT(*) n FROM whatsapp_sync_queue"))[0].n),
+      1,
+    );
+    let freshCalls = 0;
+    const recovered = createWhatsAppService({
+      query,
+      transaction,
+      audit,
+      request: async (_route, body) => {
+        freshCalls++;
+        assert.equal(body.cursor, null);
+        assert.equal(body.recoverHistory, false);
+        return { messages: [], scannedCount: 0, hasMore: false };
+      },
+    });
+    await recovered.poll({ automatic: true });
+    assert.equal(freshCalls, 0);
+    await recovered.poll();
+    assert.equal(freshCalls, 1);
+    assert.equal(recovered.status.error, null);
+    assert.equal((await recovered.config()).syncProgress, null);
+    assert.equal((await recovered.config()).resumeFromCache, false);
+    assert.equal(
+      Number((await query("SELECT COUNT(*) n FROM whatsapp_sync_queue"))[0].n),
+      0,
+    );
+  }
+  // An in-flight response cannot restore the cleared job or enqueue stale data.
+  {
+    await resetSync({ groupHistoryVersion: 1 });
+    let release, started;
+    const entered = new Promise((resolve) => {
+      started = resolve;
+    });
+    const delayed = createWhatsAppService({
+      query,
+      transaction,
+      audit,
+      request: async () => {
+        started();
+        await new Promise((resolve) => {
+          release = resolve;
+        });
+        return {
+          messages: [msg("cleared-stale-response", "IN 10:00", 1)],
+          hasMore: false,
+        };
+      },
+    });
+    const oldPoll = delayed.poll();
+    await entered;
+    await delayed.clearStuckSync();
+    release();
+    await oldPoll;
+    assert.equal((await delayed.config()).syncProgress, null);
+    assert.equal((await delayed.config()).resumeFromCache, true);
+    assert.equal(
+      Number((await query("SELECT COUNT(*) n FROM whatsapp_sync_queue"))[0].n),
+      0,
+    );
+    assert.equal(
+      (
+        await query(
+          "SELECT id FROM whatsapp_events WHERE messageId='cleared-stale-response'",
+        )
+      ).length,
+      0,
+    );
+  }
+  // Cached messages are not proof that a phone history request has finished.
+  await resetSync({ groupHistoryVersion: 1, checkedThrough: t - 100 });
+  let phonePending = true;
+  let phoneClock = Date.now();
+  const phoneRecovery = createWhatsAppService({
+    query,
+    transaction,
+    audit,
+    now: () => phoneClock,
+    request: async (_route, body) => {
+      assert.equal(body.recoverHistory, true);
+      return {
+        messages: [msg("phone-recovery", "OUT 18:00", 6)],
+        historyPending: phonePending,
+        hasMore: false,
+        scannedCount: 1,
+      };
+    },
+  });
+  await phoneRecovery.poll();
+  assert.match(phoneRecovery.status.error, /history recovery is pending/);
+  assert.equal((await phoneRecovery.config()).checkedThrough, t - 100);
+  assert.equal(
+    (
+      await query(
+        "SELECT * FROM whatsapp_events WHERE messageId='phone-recovery'",
+      )
+    ).length,
+    0,
+  );
+  assert.equal(
+    (await phoneRecovery.config()).syncProgress.waitingForHistory,
+    true,
+  );
+  assert.equal(
+    (await phoneRecovery.config()).syncProgress.recoverHistory,
+    true,
+  );
+  phonePending = false;
+  phoneClock += 16000;
+  await phoneRecovery.poll({ automatic: true });
+  assert.equal(phoneRecovery.status.error, null);
+  assert.equal(
+    (
+      await query(
+        "SELECT * FROM whatsapp_events WHERE messageId='phone-recovery'",
+      )
+    ).length,
+    1,
+  );
+  // A page containing only hidden protocol messages still has a valid cursor.
+  await resetSync({ groupHistoryVersion: 1, messagesPerSync: 1 });
+  const rawPages = createWhatsAppService({
+    query,
+    transaction,
+    audit,
+    request: async (_, body) =>
+      body.cursor
+        ? {
+            messages: [msg("after-protocol-page", "IN 09:00", 6)],
+            scannedCount: 1,
+            hasMore: false,
+          }
+        : {
+            messages: [],
+            scannedCount: 1,
+            cursor: "protocol-page",
+            hasMore: true,
+          },
+  });
+  await rawPages.poll();
+  assert.equal(rawPages.status.error, null);
+  assert.equal((await rawPages.config()).syncProgress.scanned, 1);
+  await rawPages.poll();
+  assert.equal(rawPages.status.error, null);
+  assert.equal(
+    (
+      await query(
+        "SELECT * FROM whatsapp_events WHERE messageId='after-protocol-page'",
+      )
+    ).length,
+    1,
+  );
   // A stuck cursor reports an error without applying an incomplete history.
   await resetSync();
   let stalledCalls = 0;
@@ -1029,6 +1226,85 @@ try {
   console.log(
     "PASS: local today/yesterday guard, automatic retries, old manual overwrite, overnight protection, archived history and deduplication.",
   );
+  // Reconnection history can arrive after today's IN advanced the checkpoint.
+  // Neither yesterday's IN nor OUT may be inside a rolling 24-hour window.
+  for (const timeZone of ["UTC", "Asia/Kolkata", "America/New_York"]) {
+    const catchupNow = Date.parse(
+      timeZone === "Asia/Kolkata"
+        ? "2026-10-27T17:30:00Z"
+        : timeZone === "America/New_York"
+          ? "2026-10-28T03:00:00Z"
+          : "2026-10-27T23:00:00Z",
+    );
+    await resetSync({
+      timeZone,
+      groupHistoryVersion: 1,
+      since: Date.parse("2026-10-24T00:00:00Z") / 1000,
+      checkedThrough: catchupNow / 1000,
+      lastHistoryScan: catchupNow / 1000,
+      messagesPerSync: 1,
+    });
+    const missed = [
+      msg("catchup-today-" + timeZone, "IN 09:00", 1, catchupNow / 1000 - 60),
+      msg(
+        "catchup-chat-" + timeZone,
+        "See you tomorrow",
+        1,
+        catchupNow / 1000 - 26 * 3600,
+      ),
+      msg(
+        "catchup-out-" + timeZone,
+        "OUT 17:00",
+        1,
+        catchupNow / 1000 - 30 * 3600,
+      ),
+      msg(
+        "catchup-in-" + timeZone,
+        "IN 09:00",
+        1,
+        catchupNow / 1000 - 38 * 3600,
+      ),
+    ];
+    const request = async (_, body) => {
+      const offset = body.cursor
+        ? missed.findIndex((m) => m.id === body.cursor) + 1
+        : 0;
+      return {
+        messages: missed.slice(offset, offset + 1),
+        cursor: missed[offset]?.id,
+        hasMore: offset + 1 < missed.length,
+      };
+    };
+    for (let attempt = 0; attempt < 8; attempt++) {
+      // Restart between pages to exercise durable progress.
+      const catchup = createWhatsAppService({
+        query,
+        transaction,
+        audit,
+        request,
+        now: () => catchupNow,
+      });
+      await catchup.poll();
+      assert.equal(catchup.status.error, null);
+      if (!(await catchup.config()).syncProgress) break;
+    }
+    for (const message of missed.filter(
+      (m) => !m.id.startsWith("catchup-chat-"),
+    )) {
+      assert.equal(
+        (
+          await query("SELECT * FROM whatsapp_events WHERE messageId=?", [
+            message.id,
+          ])
+        ).length,
+        1,
+        message.id,
+      );
+    }
+  }
+  console.log(
+    "PASS: next-day reconnect catches yesterday's messages after today's IN, across timezones and restarts.",
+  );
   // Yesterday's OUT is inside the incremental window, but its IN is outside.
   // Search must cross the old cutoff and survive a one-message page limit.
   const recoveryNow = Date.parse(
@@ -1233,6 +1509,332 @@ try {
   console.log(
     "PASS: selected-day sync/checkpoints, timezone day boundaries, message pagination and scoped archive.",
   );
+
+  {
+    // Edits must never apply automatically, even with both automatic flags enabled.
+    const editConfig = {
+      ...cfg,
+      groupId: "123@g.us",
+      enabled: true,
+      since: t - 86400,
+      autoApprove: true,
+      autoOverwrite: true,
+      allowEditedMessages: false,
+    };
+    await query("UPDATE whatsapp_config SET config=? WHERE id=1", [
+      JSON.stringify(editConfig),
+    ]);
+    const inserted = await query(
+      "INSERT INTO employees (name,department,role,status,phone) VALUES ('Edit test','Sales','Staff','Active','+919000000099')",
+    );
+    const employeeId = inserted.insertId;
+    const editedMsg = {
+      ...msg("edit-review-test", "IN 10:00"),
+      sender: "919000000099@s.whatsapp.net",
+    };
+    assert.equal((await service.ingest(editedMsg, "test")).state, "applied");
+    const readTime = async () =>
+      (
+        await query("SELECT inTime FROM attendance WHERE employeeId=?", [
+          employeeId,
+        ])
+      )[0].inTime;
+    assert.equal(await readTime(), "10:00");
+    editedMsg.content = "IN 10:30";
+    editedMsg.isEdited = true;
+    assert.equal(
+      (await service.ingest(editedMsg, "test", true, true)).state,
+      "review",
+    );
+    assert.equal(await readTime(), "10:00");
+    const [editedEvent] = await query(
+      "SELECT * FROM whatsapp_events WHERE messageId='edit-review-test'",
+    );
+    assert.equal(editedEvent.isEdited, 1);
+    assert.equal(editedEvent.previousText, "IN 10:00");
+    assert.equal(
+      (await service.retryEvent(editedEvent.id, true)).state,
+      "review",
+    );
+    editConfig.allowEditedMessages = true;
+    await query("UPDATE whatsapp_config SET config=? WHERE id=1", [
+      JSON.stringify(editConfig),
+    ]);
+    assert.equal(
+      (await service.ingest(editedMsg, "test", true, true)).state,
+      "review",
+    );
+    assert.equal(await readTime(), "10:00");
+    assert.equal(
+      (await service.retryEvent(editedEvent.id, true)).state,
+      "applied",
+    );
+    assert.equal(await readTime(), "10:30");
+    // Malformed times remain visible and can be corrected manually without changing source text.
+    const badMsg = {
+      ...editedMsg,
+      id: "bad-time-correction",
+      content: "IN wrong",
+      isEdited: false,
+    };
+    assert.equal((await service.ingest(badMsg, "test")).state, "review");
+    const [badEvent] = await query(
+      "SELECT * FROM whatsapp_events WHERE messageId='bad-time-correction'",
+    );
+    const correction = {
+      expectedText: badMsg.content,
+      employeeId,
+      date: new Date(t * 1000).toISOString().slice(0, 10),
+      action: "in",
+      time: "11:00",
+    };
+    await assert.rejects(
+      () =>
+        service.retryEvent(badEvent.id, true, {
+          ...correction,
+          expectedText: "stale",
+        }),
+      /Message changed/,
+    );
+    assert.equal(
+      (await service.retryEvent(badEvent.id, false, correction)).state,
+      "review",
+    );
+    assert.equal(
+      (await service.ingest(badMsg, "test", true, true)).state,
+      "review",
+    );
+    assert.equal(await readTime(), "10:30");
+    assert.equal(
+      (await service.retryEvent(badEvent.id, true, correction)).state,
+      "applied",
+    );
+    assert.equal(await readTime(), "11:00");
+    assert.equal(
+      (
+        await query("SELECT text FROM whatsapp_events WHERE id=?", [
+          badEvent.id,
+        ])
+      )[0].text,
+      "IN wrong",
+    );
+    const editSync = createWhatsAppService({
+      query,
+      transaction,
+      audit,
+      request: async () => ({
+        messages: [{ ...editedMsg, content: "IN 11:15" }],
+        hasMore: false,
+      }),
+    });
+    await editSync.poll();
+    assert.equal(editSync.status.error, null);
+    const [syncedEdit] = await query(
+      "SELECT * FROM whatsapp_events WHERE id=?",
+      [editedEvent.id],
+    );
+    assert.equal(syncedEdit.text, "IN 11:15");
+    assert.equal(syncedEdit.state, "review");
+    assert.equal(await readTime(), "11:00");
+    const approveRoute = routes.get("POST /api/whatsapp/approve");
+    await assert.rejects(
+      () =>
+        approveRoute(
+          { body: { id: editedEvent.id, expectedText: "stale" } },
+          { json() {} },
+        ),
+      /Message changed/,
+    );
+    let routeResult;
+    await approveRoute(
+      { body: { id: editedEvent.id, expectedText: "IN 11:15" } },
+      {
+        json(value) {
+          routeResult = value;
+        },
+      },
+    );
+    assert.equal(routeResult.state, "applied");
+    assert.equal(await readTime(), "11:15");
+    const firstSeenEdit = {
+      ...editedMsg,
+      id: "first-seen-edit",
+      content: "IN 11:20",
+    };
+    assert.equal(
+      (await service.ingest(firstSeenEdit, "test", true, true)).state,
+      "review",
+    );
+    assert.equal(await readTime(), "11:15");
+    const groupMessage = {
+      ...editedMsg,
+      id: "manual-selection",
+      content: "At work",
+      isEdited: false,
+    };
+    const browser = createWhatsAppService({
+      query,
+      transaction,
+      audit,
+      request: async (route, body) =>
+        route === "/chats/messages"
+          ? {
+              messages: [
+                groupMessage,
+                { ...groupMessage, id: "arbitrary", content: "Hello everyone" },
+                {
+                  ...groupMessage,
+                  id: "both-times",
+                  content: "Update: In time 9:15 AM, Out time 7:05 PM",
+                },
+                {
+                  ...groupMessage,
+                  id: "photo",
+                  type: "image",
+                  content: null,
+                  caption: "Team lunch",
+                },
+              ],
+              hasMore: false,
+            }
+          : { message: groupMessage },
+    });
+    await browser.scanGroupMessages({ start: true });
+    const listed = await browser.groupMessages({ date: correction.date });
+    assert.equal(listed.messages.length, 4);
+    assert.ok(listed.messages.some((m) => m.content === "Hello everyone"));
+    assert.ok(listed.messages.some((m) => m.type === "image"));
+    const times = listed.messages.find((m) => m.id === "both-times");
+    assert.equal(times.inTime, "09:15");
+    assert.equal(times.outTime, "19:05");
+    assert.equal(times.attendanceState, null);
+    assert.equal(listed.scan.state, "complete");
+    await assert.rejects(
+      () =>
+        browser.selectGroupMessage({
+          messageId: groupMessage.id,
+          sessionId: "test",
+          groupId: "different@g.us",
+        }),
+      /Group changed/,
+    );
+    const selected = await browser.selectGroupMessage({
+      messageId: groupMessage.id,
+      sessionId: "test",
+      groupId: "123@g.us",
+    });
+    assert.equal(selected.state, "review");
+    assert.equal(selected.manualOnly, 1);
+    assert.equal(await readTime(), "11:15");
+    assert.equal(
+      (await browser.ingest(groupMessage, "test", true, true)).state,
+      "review",
+    );
+    assert.equal(await readTime(), "11:15");
+    const selectedAgain = await browser.selectGroupMessage({
+      messageId: groupMessage.id,
+      sessionId: "test",
+      groupId: "123@g.us",
+    });
+    assert.equal(selectedAgain.id, selected.id);
+    assert.equal(
+      (
+        await browser.retryEvent(selected.id, true, {
+          ...correction,
+          expectedText: "At work",
+          time: "11:25",
+        })
+      ).state,
+      "applied",
+    );
+    assert.equal(await readTime(), "11:25");
+    await browser.clearGroupMessages({
+      sessionId: "test",
+      groupId: "123@g.us",
+      date: correction.date,
+    });
+    assert.equal((await browser.groupMessages()).messages.length, 0);
+    assert.equal(
+      (await browser.groupMessages({ history: true })).messages.length,
+      4,
+    );
+    await browser.scanGroupMessages({ start: true });
+    assert.equal((await browser.groupMessages()).messages.length, 0);
+    assert.equal(await readTime(), "11:25");
+    const paged = createWhatsAppService({
+      query,
+      transaction,
+      audit,
+      request: async (_route, body) =>
+        body.cursor
+          ? {
+              messages: [
+                {
+                  ...groupMessage,
+                  id: "page-two",
+                  content: "No attendance pattern",
+                },
+              ],
+              hasMore: false,
+            }
+          : {
+              messages: [
+                {
+                  ...groupMessage,
+                  id: "page-one",
+                  content: "General announcement",
+                },
+              ],
+              hasMore: true,
+              cursor: "next-page",
+            },
+    });
+    assert.equal(
+      (await paged.scanGroupMessages({ start: true })).scan.state,
+      "scanning",
+    );
+    assert.equal((await paged.scanGroupMessages()).scan.state, "complete");
+    assert.equal((await paged.groupMessages()).messages.length, 2);
+    let release, started;
+    const waiting = new Promise((resolve) => {
+      started = resolve;
+    });
+    const blocked = createWhatsAppService({
+      query,
+      transaction,
+      audit,
+      request: async () => {
+        started();
+        return new Promise((resolve) => {
+          release = resolve;
+        });
+      },
+    });
+    const inflight = blocked.scanGroupMessages({ start: true });
+    await waiting;
+    await blocked.clearGroupMessages({
+      sessionId: "test",
+      groupId: "123@g.us",
+    });
+    release({
+      messages: [{ ...groupMessage, id: "late-page", content: "Late fetch" }],
+      hasMore: false,
+    });
+    await inflight;
+    assert.equal((await blocked.groupMessages()).messages.length, 0);
+    console.log(
+      "PASS: multi-page unfiltered scan and clear invalidating an in-flight page.",
+    );
+    console.log(
+      "PASS: unfiltered group scan, media/non-attendance retention, both time hints, scoped archive and deduplication.",
+    );
+    console.log(
+      "PASS: group message listing, source validation, idempotent selection, manual-only review and corrected approval.",
+    );
+    console.log(
+      "PASS: edited-message opt-in, manual-only approval, preserved original attendance, correction validation and explicit overwrite.",
+    );
+  }
 } finally {
   if (pool) await pool.end();
   await admin.query(`DROP DATABASE IF EXISTS \`${database}\``);

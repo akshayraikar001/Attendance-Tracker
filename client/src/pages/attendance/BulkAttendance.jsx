@@ -1,9 +1,13 @@
 import React, { useState } from "react";
+import { holidayForDate } from "../../../../shared/calendar.js";
 import DateNavigator, {
   RangeNavigator,
 } from "../../components/common/DateNavigator.jsx";
 export default function BulkAttendance({
   employees,
+  records = [],
+  holidays = [],
+  rules = {},
   date,
   api,
   onApplied,
@@ -18,6 +22,9 @@ export default function BulkAttendance({
     [overwrite, setOverwrite] = useState(false),
     [notes, setNotes] = useState(""),
     [status, setStatus] = useState("Absent"),
+    [entryMode, setEntryMode] = useState("status"),
+    [inTime, setInTime] = useState(""),
+    [outTime, setOutTime] = useState(""),
     [preview, setPreview] = useState(null),
     [busy, setBusy] = useState(false),
     [error, setError] = useState(""),
@@ -26,6 +33,14 @@ export default function BulkAttendance({
   const endpoint = `/attendance/bulk-${reset ? "reset" : "attendance"}`;
   const visible = active.filter(
     (e) => group === "All groups" || e.department === group,
+  );
+  const fromRecords = new Map(
+    records.filter((r) => r.date === from).map((r) => [r.employeeId, r]),
+  );
+  const fromHoliday = holidayForDate(
+    from,
+    holidays,
+    rules.weeklyOffDays ?? [0],
   );
   const groups = [...new Set(active.map((e) => e.department))];
   const update = (setter, value) => {
@@ -42,12 +57,16 @@ export default function BulkAttendance({
     overwrite,
     notes,
     status,
+    entryMode,
+    inTime: entryMode === "time" ? inTime : null,
+    outTime: entryMode === "time" ? outTime : null,
   };
   async function review(e) {
     e.preventDefault();
     setBusy(true);
     setError("");
     setResult(null);
+    setPreview(null);
     try {
       setPreview(await api(endpoint + "/preview", payload));
     } catch (e) {
@@ -97,7 +116,6 @@ export default function BulkAttendance({
                 label="From"
                 value={from}
                 onChange={(v) => update(setFrom, v)}
-                required
               />
               <DateNavigator
                 label="To"
@@ -114,9 +132,7 @@ export default function BulkAttendance({
                 setTo(r.to);
               }}
             />
-            <p className="muted">
-              Up to 366 days. No changes are made until you review and apply.
-            </p>
+
             {reset && (
               <p className="muted">
                 Clears saved In time, Out time, status and notes for the
@@ -151,13 +167,32 @@ export default function BulkAttendance({
               </button>
               <button
                 type="button"
-                className="button"
+                className="bulk-clear-selection"
+                aria-label="Clear selected employees"
+                title="Clear selection"
                 onClick={() => update(setSelected, [])}
               >
-                Clear selection
+                ×
               </button>
             </div>
-            <p>{selected.length} selected</p>
+            <label className="checkbox bulk-select-all">
+              <input
+                type="checkbox"
+                checked={active.length > 0 && selected.length === active.length}
+                onChange={(e) =>
+                  update(
+                    setSelected,
+                    e.target.checked
+                      ? active.map((employee) => employee.id)
+                      : [],
+                  )
+                }
+              />
+              Select all employees
+            </label>
+            <p>
+              {selected.length} selected · Attendance on {from || "From date"}
+            </p>
             <div className="bulk-employees">
               {visible.map((e) => (
                 <label className="checkbox" key={e.id}>
@@ -175,7 +210,20 @@ export default function BulkAttendance({
                   />
                   <span>
                     {e.name}
-                    <small>{e.department}</small>
+                    <small
+                      className={
+                        "badge " +
+                        (
+                          fromRecords.get(e.id)?.status ??
+                          (fromHoliday ? "Holiday" : "Unmarked")
+                        )
+                          .toLowerCase()
+                          .replace(" ", "-")
+                      }
+                    >
+                      {fromRecords.get(e.id)?.status ??
+                        (fromHoliday ? "Holiday" : "Unmarked")}
+                    </small>
                   </span>
                 </label>
               ))}
@@ -183,22 +231,75 @@ export default function BulkAttendance({
             {!reset && (
               <>
                 <label>
-                  Attendance status
+                  Bulk entry type
                   <select
-                    value={status}
-                    onChange={(e) => update(setStatus, e.target.value)}
+                    value={entryMode}
+                    onChange={(e) => update(setEntryMode, e.target.value)}
                   >
-                    {["Present", "Absent", "Half day", "Attended"].map(
-                      (value) => (
-                        <option key={value}>{value}</option>
-                      ),
-                    )}
+                    <option value="status">Attendance status</option>
+                    <option value="time">In / out time</option>
                   </select>
                 </label>
-                <p className="muted">
-                  Records a direct status and keeps any saved In/Out times and
-                  measured hours. No times are invented for unmarked days.
-                </p>
+                {entryMode === "time" ? (
+                  <div className="bulk-dates">
+                    <label>
+                      In time
+                      <input
+                        type="time"
+                        value={inTime}
+                        onChange={(e) => update(setInTime, e.target.value)}
+                      />
+                      <button
+                        type="button"
+                        className="button"
+                        onClick={() => update(setInTime, "")}
+                      >
+                        Clear
+                      </button>
+                    </label>
+                    <label>
+                      Out time
+                      <input
+                        type="time"
+                        value={outTime}
+                        onChange={(e) => update(setOutTime, e.target.value)}
+                      />
+                      <button
+                        type="button"
+                        className="button"
+                        onClick={() => update(setOutTime, "")}
+                      >
+                        Clear
+                      </button>
+                    </label>
+                    <p className="muted">
+                      These times are applied to every selected employee-day.
+                      Enter either time or both; leave a field blank when it is
+                      not available.
+                    </p>
+                  </div>
+                ) : (
+                  <label>
+                    Attendance status
+                    <select
+                      className={`attendance-status-select ${status.toLowerCase().replace(" ", "-")}`}
+                      value={status}
+                      onChange={(e) => update(setStatus, e.target.value)}
+                    >
+                      {["Present", "Absent", "Half day", "Attended"].map(
+                        (value) => (
+                          <option
+                            className={value.toLowerCase().replace(" ", "-")}
+                            key={value}
+                          >
+                            {value}
+                          </option>
+                        ),
+                      )}
+                    </select>
+                  </label>
+                )}
+
                 <label className="checkbox">
                   <input
                     type="checkbox"
@@ -217,9 +318,14 @@ export default function BulkAttendance({
                 </label>
                 {overwrite && (
                   <p className="error-text">
-                    Changes the selected status while keeping saved In/Out times
-                    and measured hours. Use attendance editing to clear times
-                    explicitly.
+                    Changes the selected entry while replacing saved values for
+                    the selected employee-days.
+                  </p>
+                )}
+                {entryMode === "time" && !overwrite && (
+                  <p className="muted">
+                    Existing employee-days are updated when the supplied In or
+                    Out side is missing; already-filled times are skipped.
                   </p>
                 )}
                 <label>
@@ -244,8 +350,11 @@ export default function BulkAttendance({
                 `Reset ${result.total} attendance entries.`
               ) : (
                 <>
-                  Saved {result.total} {status} entries. Skipped{" "}
-                  {result.skippedExisting} existing entries and{" "}
+                  Saved {result.total}{" "}
+                  {entryMode === "time"
+                    ? `time entries (${inTime}–${outTime || "open"})`
+                    : `${status} entries`}
+                  . Skipped {result.skippedExisting} existing entries and{" "}
                   {result.skippedHolidays} holiday employee-days.
                 </>
               )}
@@ -276,8 +385,15 @@ export default function BulkAttendance({
                         ? "Clear " + r.replaces
                         : r.replaces
                           ? "Replace " + r.replaces
-                          : "Mark " + status}
+                          : entryMode === "time"
+                            ? `Record ${inTime}–${outTime || "open"}`
+                            : "Mark " + status}
                     </span>
+                    {entryMode === "time" && (
+                      <span>
+                        In {r.inTime || "—"} · Out {r.outTime || "—"}
+                      </span>
+                    )}
                   </div>
                 ))}
               </div>

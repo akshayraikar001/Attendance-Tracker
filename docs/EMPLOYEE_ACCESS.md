@@ -10,6 +10,8 @@ Admins use **Time away → Record time away** for departures during a shift. Ent
 
 ## Keycloak setup
 
+For the configured hosted test realm and local Dayline, follow [local Keycloak setup](KEYCLOAK_LOCAL_SETUP.md); an importable client file is included.
+
 Create an OpenID Connect confidential client in your Keycloak realm, enable Standard flow, and register the exact callback URI (no wildcard). Set these server environment values:
 
 ```

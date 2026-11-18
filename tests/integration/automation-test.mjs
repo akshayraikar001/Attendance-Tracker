@@ -1,3 +1,8 @@
+import {
+  connectTestAdmin,
+  testDatabaseHost,
+  testDatabasePort,
+} from "../helpers/database.mjs";
 import assert from "node:assert/strict";
 import mysql from "mysql2/promise";
 import { spawnSync } from "node:child_process";
@@ -6,10 +11,7 @@ import { createWhatsAppService } from "../../server/src/services/whatsapp.js";
 import { createAutoClockOut } from "../../server/src/services/auto-clockout.js";
 import { defaults, settingsSchema } from "../../server/src/services/rules.js";
 import { recalculateAttendance } from "../../server/src/services/recalculate.js";
-const admin = await mysql.createConnection({
-  socketPath: process.cwd() + "/.local/mysql.sock",
-  user: "root",
-});
+const admin = await connectTestAdmin();
 const decoded = (value) =>
   typeof value === "string" ? JSON.parse(value) : value;
 const database = "attendance_automation_test_" + Date.now();
@@ -23,8 +25,8 @@ try {
     encoding: "utf8",
     env: {
       ...process.env,
-      DB_HOST: "127.0.0.1",
-      DB_PORT: "3307",
+      DB_HOST: testDatabaseHost,
+      DB_PORT: String(testDatabasePort),
       DB_USER: "attendance",
       DB_PASSWORD: "attendance_dev",
       DB_NAME: database,
@@ -32,8 +34,8 @@ try {
   });
   assert.equal(setup.status, 0, setup.stderr);
   pool = mysql.createPool({
-    host: "127.0.0.1",
-    port: 3307,
+    host: testDatabaseHost,
+    port: testDatabasePort,
     user: "attendance",
     password: "attendance_dev",
     database,
@@ -114,7 +116,7 @@ try {
   let first = (await query("SELECT * FROM attendance WHERE employeeId=1"))[0];
   assert.equal(first.outTime, "19:05");
   assert.equal(first.workedMinutes, 545);
-  assert.match(first.notes, /Original note\nAuto Out time/);
+  assert.match(first.notes, /Original note\n!! Auto Out time Added/);
   assert.equal(
     (await query("SELECT outTime FROM attendance WHERE employeeId=2"))[0]
       .outTime,
@@ -205,8 +207,7 @@ try {
     )
   )[0];
   assert.equal(customRow.outTime, "19:30");
-  assert.match(customRow.notes, /7:30 PM/);
-  assert.match(customRow.notes, /9:00 PM/);
+  assert.match(customRow.notes, /!! Auto Out time Added/);
   assert.equal(
     (
       await query(

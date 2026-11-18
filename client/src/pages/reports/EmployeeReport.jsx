@@ -44,6 +44,7 @@ export default function EmployeeReport({
     try {
       await downloadAttendanceWorkbook(rows, {
         filename: `employee-${person.id}-${from}-${to}.xlsx`,
+        employeeReport: true,
       });
     } catch {
       setError("Could not export report. Try again.");
@@ -56,10 +57,6 @@ export default function EmployeeReport({
       <div className="card-heading">
         <div>
           <h2>Employee report</h2>
-          <p>
-            Individual attendance, hours, punctuality, and notes for your
-            selected period.
-          </p>
         </div>
         <div className="heading-actions">
           <button
@@ -153,12 +150,6 @@ export default function EmployeeReport({
             <span>
               Overtime <b>{hours(sum("overtimeMinutes"))}</b>
             </span>
-            <span>
-              Late <b>{sum("lateMinutes")}m</b>
-            </span>
-            <span>
-              Early departure <b>{sum("earlyMinutes")}m</b>
-            </span>
           </div>
           <div className="table-scroll">
             <table>
@@ -171,9 +162,6 @@ export default function EmployeeReport({
                     "Out time",
                     "Hours",
                     "Overtime",
-                    "Late",
-                    "Early departure",
-                    "Method",
                     "Notes",
                   ].map((h) => (
                     <th key={h}>{h}</th>
@@ -200,21 +188,12 @@ export default function EmployeeReport({
                     </td>
                     <td>{hours(r.workedMinutes)}</td>
                     <td>{hours(r.overtimeMinutes)}</td>
-                    <td>{r.lateMinutes == null ? "—" : r.lateMinutes + "m"}</td>
-                    <td>
-                      {r.earlyMinutes == null ? "—" : r.earlyMinutes + "m"}
-                    </td>
-                    <td>{r.mode || "—"}</td>
                     <td className="report-notes">{r.notes || "—"}</td>
                   </tr>
                 ))}
               </tbody>
             </table>
           </div>
-          <p className="table-footer">
-            Manual entries have no measured hours. Unmarked days are not counted
-            as absences. Breaks remain included.
-          </p>
         </>
       ) : (
         <p className="empty">

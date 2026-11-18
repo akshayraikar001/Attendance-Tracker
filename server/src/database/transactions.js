@@ -1,10 +1,6 @@
 import { pool } from "../config/db.js";
-export async function audit(conn, action, entity, entityId, details) {
-  await conn.execute(
-    "INSERT INTO audit (action,entity,entityId,details) VALUES (?,?,?,?)",
-    [action, entity, entityId, JSON.stringify(details)],
-  );
-}
+// Compatibility hook: activity logging is disabled for all callers.
+export async function audit() {}
 export async function transaction(fn) {
   const conn = await pool.getConnection();
   try {

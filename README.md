@@ -81,6 +81,8 @@ There is no default application password or Gmail verification step. Existing in
 
 Employee access, Keycloak configuration, and the admin **Time away** log are documented in [Employee access](docs/EMPLOYEE_ACCESS.md).
 
+For local Dayline with the hosted Keycloak test realm, see [Keycloak local setup](docs/KEYCLOAK_LOCAL_SETUP.md), including the importable client file and `npm run keycloak:check` command.
+
 ## 5. Connect WhatsApp through Chatery
 
 Manual attendance works without Chatery. WhatsApp imports require **both Dayline and Chatery to be running**.
@@ -135,7 +137,7 @@ Optional: set `CHATERY_MANAGED_PATH` to the absolute path of your local Chatery 
 
 Examples: `In time 10:50`, `In time 2:05`, `Out time 6:55`, `IN`, `OUT`. Without AM/PM, the parser uses its office-hours rules and message timestamp. Plain `IN`/`OUT` use the message time in the selected timezone. See [WhatsApp behavior and examples](docs/WHATSAPP.md).
 
-Only the selected group's messages are imported. Dayline sends no WhatsApp messages. Leave requests use the same linked device and group but require **Allow Leave Approval** and always need manual approval.
+Only the selected group's messages are imported. Attendance imports do not send replies. Administrators can explicitly send private monthly employee reports from Reports → Send Emp Report. Leave requests use the same linked device and group but require **Allow Leave Approval** and always need manual approval.
 
 The phone pairing is stored in Chatery's `sessions/` directory, not in the Dayline repository. Closing the terminals normally keeps pairing. Retain that directory; logging out/unlinking or deleting it requires scanning again. WhatsApp can also revoke a linked device.
 
@@ -145,7 +147,7 @@ The phone pairing is stored in Chatery's `sessions/` directory, not in the Dayli
 - **Calendar:** see daily counts and absentee names; use the three dots for a preview.
 - **Settings:** workspace, department and employee timings, recurring weekday shifts, time display and attendance timezone. One-hour break deduction is off by default.
 - **Automatic Out time:** when enabled, after the configured cutoff (default 8 PM), an eligible entry with In time but no Out time receives the configured time (default 7:05 PM) and a note. Existing Out times and overnight shifts are preserved. The backend must run; eligible overdue entries are checked on startup when catch-up is enabled.
-- **Reports:** daily, monthly, single-day attendance details, employee summaries and Excel export. Activity log shows readable changes and filters within the latest 500 events.
+- **Reports:** daily, monthly, single-day attendance details, employee summaries and Excel export.
 - **Leave Approval:** review leave/half-day requests and manually approve or reject. Existing attendance requires explicit overwrite.
 
 ## Use on another laptop or shared server
@@ -214,8 +216,8 @@ Location check-ins for field employees: see [Location tracking setup](docs/LOCAT
 ## Attendance updates
 
 - **Leave dates:** “today”, “tomorrow”/“tommorw”, “today and tomorrow” and consecutive lists like “15,16” suggest both From/To dates. Relative dates use the original message timestamp in the selected timezone. Old pending requests with missing dates are rechecked when listed; approved/rejected requests are unchanged. Separate dates like “15,18” still need review rather than marking the days between them.
-- **Bulk attendance:** select employees, dates and a status (Present, Absent, Half day or Attended), preview, then apply. Changing the status invalidates the preview. Existing records and holidays are skipped by default. This records direct statuses, without inventing In/Out times or worked hours. Reset attendance remains available separately.
-- **Monthly Daily working avg:** total recorded hours divided by Present + Half-day count. Absent days are not in the divisor. For example, 36 hours over 4 Present days and 1 Half day gives 7h 12m. No qualifying days displays a dash (blank in Excel); direct statuses contribute no measured hours.
+- **Bulk attendance:** select employees and dates, then choose either a status (Present, Absent, Half day or Attended) or **In / out time**. Time mode applies an In time, an Out time, or both to every selected employee-day, calculates worked hours and attendance metrics when both sides are available, and supports open In-only entries. Out time requires a saved or supplied In time. With overwrite off, only missing time fields are filled; status edits preserve saved times and overnight flags. Preview is required before applying; existing records and holidays are skipped by default. Reset attendance remains available separately.
+- **Monthly reports and review controls:** Monthly reports offer the existing time export and a status-only Excel export (P/A/H for Present/Absent/Half day, Holiday for holidays, AT/IP/dash for other states), with counts and no time columns. Settings > Report settings independently controls the daily average in reports/Excel and print; half-day recorded hours are optional (off by default). Bulk attendance and reset display colored attendance badges for the From date. Already reviewed dismisses a pending leave without touching attendance, retains its audit record and is available in the Already reviewed filter. Sidebar navigation through Location tracking is unchanged; lower duplicate actions are removed, and the Account dropdown displays username/role plus left-aligned action icons.
 - **Automatic absence:** Settings → Timings → Whole workspace → Automatically mark absent after day end. Off by default. Once enabled, completed local days are checked every minute and on startup. Active employees with no attendance are marked Absent with a short note; holidays, existing entries and dates before activation are skipped. Overnight shifts wait until their end time. Long offline catch-up runs in batches of up to 31 days. Re-enabling starts from that day, without filling the disabled period.
 - **Late WhatsApp imports:** an untouched automatic absence can be replaced by a valid In message according to the existing auto-approval/manual approval settings. A manually changed absence still requires explicit overwrite.
 
@@ -234,3 +236,21 @@ In **Settings → Timings**, configure automatic Out time: enable/disable, **Che
 Changing an employee's direct status keeps saved In/Out times visible in attendance and reports. Existing measured hours are retained; no hours are invented when times are missing. Bulk status changes and approved leave follow the same rule. Use the explicit Clear buttons in the attendance editor to remove times, or Reset attendance to remove an entry.
 
 WhatsApp messages are grouped by full date in the selected group timezone. Today is expanded by default; older dates are collapsed. Use **Sync today**, choose a **Sync date**, **Sync all history**, or select day checkboxes for bulk sync/clear. Clearing archives messages and preserves attendance and duplicate protection. Open a day and choose **Load more messages** to view additional pages. The top navigation shows WhatsApp connection status, refreshed every 15 seconds. The WhatsApp panel shows Connection/Import and any remaining batch progress. Day-specific sync respects existing approval settings and the today/yesterday auto-approval window; older messages require manual approval. Large jobs continue in batches, and a new selection waits until the current job finishes.
+
+### Send monthly employee reports
+
+Open **Reports → Send Emp Report** as an administrator. Choose a month, **PDF** or **Excel**, and **With time & details** or **Simple attendance only**. Select employees, optionally download a preview, then click **Send selected reports** and confirm the recipients. Only selected employees receive a private WhatsApp document containing their own month. The message reads “Hi Akshay, Kindly Review your October Attendence”, using the employee’s first name and selected month name. Their saved employee phone number must include the country code; the shared WhatsApp device must be connected. Attendance importing may remain paused.
+
+File names use the first name, surname initial and month, for example **Akshay R Oct Attendence.pdf**. The report itself includes the full month/year. Both formats colour attendance statuses. Detailed Excel contains date, status, In/Out times and hours, without overtime or comments. Detailed PDF uses a day-report-style table with date, In/Out times, hours and coloured status, repeating headings on additional pages. Notes and overtime are omitted. Simple reports contain dates/statuses and status counts only. Saved direct statuses/times are respected.
+
+The **Attendance report sent** column is persisted per employee/month/format/detail option. Sent means the connector confirmed a WhatsApp message ID, not delivered/read confirmation. Refresh status to retrieve the latest result. **Allow resending** is enabled by default, so previously attempted reports can be selected again with another recipient confirmation; active sends remain protected. The upper report tabs scroll horizontally. Network timeouts or interrupted sends show **Not confirmed**: check WhatsApp before resending, as the message may already have reached the employee. Closing the screen stops the remaining batch; an already submitted send can still finish.
+
+Run `npm run db:setup` after updating and restart the backend to install `employee_report_sends`. Reports are generated on demand and passed inline to Chatery; no public download URLs or report files are retained. The existing connector must support `data:` document URLs (supported by the installed Baileys connector). Files above the connector's default JSON limit are rejected before sending; choose Excel or simple attendance in that case. A bundled DejaVu font and its license support PDF text without depending on machine fonts.
+
+Automatic notes now display **!! Auto Out time Added** and **Auto from WA**. Existing saved notes are shortened on read/export without rewriting attendance or WhatsApp ownership records. Employee report and summary omit Late/Early columns; employee exports also omit Method. Attendance calculations remain unchanged.
+
+Checks: `npm run test:employee-reports` (isolated database/mock sender), `npm run test:employee-reports:ui`, and `npm test`. These tests do not send actual employee messages.
+
+Edited WhatsApp messages require manual approval; enable **Allow edited messages** in WhatsApp settings. Use **Edit entry** to correct pending attendance. See [connector setup and corrections](docs/WHATSAPP.md#edited-messages-and-corrections).
+
+- Report settings: “Include half-day overtime in daily working average” optionally adds max(0, recorded half-day minutes − configured half-day minimum) to Present-day minutes, divided by measured Present days. Off by default; mutually exclusive in Settings with including all half-day hours. With no measured Present days the average is blank. Applies to monthly reports, print and time Excel exports; attendance status and payroll overtime are unchanged.

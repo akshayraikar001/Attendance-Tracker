@@ -1,4 +1,9 @@
+import {
+  localMessageTime,
+  parseAttendanceMessage,
+} from "../../../../server/src/utils/whatsapp-parser.js";
 import { withoutMentions } from "../../../../shared/message-text.js";
+import GroupMessages from "./GroupMessages.jsx";
 import React, { useEffect, useRef, useState } from "react";
 export default function WhatsAppSettings({ api, employees, onReload }) {
   const [state, setState] = useState(null),
@@ -8,8 +13,10 @@ export default function WhatsAppSettings({ api, employees, onReload }) {
     [notice, setNotice] = useState(""),
     [busy, setBusy] = useState(false),
     [history, setHistory] = useState(false),
+    [messageView, setMessageView] = useState("attendance"),
     [selectedDays, setSelectedDays] = useState([]),
-    [syncDate, setSyncDate] = useState("");
+    [syncDate, setSyncDate] = useState(""),
+    [editing, setEditing] = useState(null);
   const messagePath = history ? "/whatsapp?history=archived" : "/whatsapp";
   async function load(forceDraft = false) {
     const data = await api(messagePath);
@@ -121,9 +128,7 @@ export default function WhatsAppSettings({ api, employees, onReload }) {
       const result = await api("/whatsapp/sync", selection);
       if (result.error) throw new Error(result.error);
       setNotice(
-        result.progress
-          ? "Sync in progress. Remaining batches continue automatically; Sync latest messages also continues this job."
-          : "Message sync completed.",
+        result.progress ? "Sync in progress." : "Message sync completed.",
       );
     });
   }
@@ -138,6 +143,27 @@ export default function WhatsAppSettings({ api, employees, onReload }) {
         setSelectedDays([]);
       });
   }
+  function editEvent(event) {
+    const parsed = parseAttendanceMessage(
+      event.text,
+      Number(event.timestamp),
+      zone,
+    );
+    const saved =
+      typeof event.correction === "string"
+        ? JSON.parse(event.correction)
+        : event.correction;
+    setEditing({
+      id: event.id,
+      employeeId: event.employeeId || "",
+      date: event.date || localMessageTime(Number(event.timestamp), zone).date,
+      action: parsed?.action || "in",
+      time: parsed?.time || "",
+      ...saved,
+      expectedText: event.text,
+      overwrite: false,
+    });
+  }
   const renderEvent = (event) => (
     <tr key={event.id}>
       <td>
@@ -147,6 +173,8 @@ export default function WhatsAppSettings({ api, employees, onReload }) {
       </td>
       <td>
         {withoutMentions(event.text) || "—"}
+        {!!event.isEdited && <span className="badge">Edited</span>}
+        {event.correction && <span className="badge">Corrected</span>}
         <br />
         <small>
           {new Date(Number(event.timestamp) * 1000).toLocaleString("en-GB", {
@@ -159,13 +187,24 @@ export default function WhatsAppSettings({ api, employees, onReload }) {
         <br />
         <small>
           {event.senderId === "unresolved"
-            ? "Sender details were missing from WhatsApp. Fetch sender to recover this message."
+            ? "Sender unavailable."
             : event.reason}
         </small>
       </td>
       <td>
         {event.state === "review" && (
           <>
+            <button
+              className="button"
+              disabled={
+                busy || (!!event.isEdited && !state.config.allowEditedMessages)
+              }
+              onClick={() => {
+                editEvent(event);
+              }}
+            >
+              Edit entry
+            </button>
             {event.senderId !== "unresolved" && (
               <select
                 aria-label={`Link sender ${event.senderName || event.senderId}`}
@@ -192,29 +231,37 @@ export default function WhatsAppSettings({ api, employees, onReload }) {
                   ))}
               </select>
             )}
-            <button
-              className="button"
-              disabled={busy}
-              onClick={() =>
-                action(async () => {
-                  const result = await api("/whatsapp/retry", {
-                    id: event.id,
-                  });
-                  setNotice(result.reason);
-                })
-              }
-            >
-              {event.senderId === "unresolved" ? "Fetch sender" : "Retry"}
-            </button>
-            {event.employeeId && (
+            {!event.isEdited && (
+              <button
+                className="button"
+                disabled={busy}
+                onClick={() =>
+                  action(async () => {
+                    const result = await api("/whatsapp/retry", {
+                      id: event.id,
+                    });
+                    setNotice(result.reason);
+                  })
+                }
+              >
+                {event.senderId === "unresolved" ? "Fetch sender" : "Retry"}
+              </button>
+            )}
+            {(event.employeeId || event.isEdited) && (
               <>
                 <button
                   className="button"
-                  disabled={busy}
+                  disabled={
+                    busy ||
+                    (!!event.isEdited && !state.config.allowEditedMessages)
+                  }
                   onClick={() =>
                     action(async () => {
+                      if (event.isEdited && !state.config.allowEditedMessages)
+                        return;
                       const result = await api("/whatsapp/approve", {
                         id: event.id,
+                        expectedText: event.text,
                       });
                       setNotice(result.reason);
                     })
@@ -231,6 +278,120 @@ export default function WhatsAppSettings({ api, employees, onReload }) {
   );
   return (
     <section className="card whatsapp-settings">
+      {editing && (
+        <div className="modal-backdrop">
+          <form
+            className="modal whatsapp-entry-editor"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="edit-wa-title"
+            onSubmit={(e) => {
+              e.preventDefault();
+              action(async () => {
+                const { id, overwrite, ...correction } = editing;
+                const result = await api("/whatsapp/approve", {
+                  id,
+                  overwrite,
+                  correction: {
+                    ...correction,
+                    employeeId: Number(correction.employeeId),
+                  },
+                });
+                setNotice(result.reason);
+                if (result.state === "applied") setEditing(null);
+              });
+            }}
+          >
+            <div className="modal-header">
+              <h2 id="edit-wa-title">Edit attendance entry</h2>
+              <button
+                type="button"
+                className="button"
+                disabled={busy}
+                onClick={() => setEditing(null)}
+              >
+                Close
+              </button>
+            </div>
+            <div className="form-grid">
+              <label>
+                Employee
+                <select
+                  required
+                  value={editing.employeeId}
+                  onChange={(e) =>
+                    setEditing({ ...editing, employeeId: e.target.value })
+                  }
+                >
+                  <option value="">Select employee</option>
+                  {employees
+                    .filter((e) => e.status === "Active")
+                    .map((e) => (
+                      <option key={e.id} value={e.id}>
+                        {e.name}
+                      </option>
+                    ))}
+                </select>
+              </label>
+              <label>
+                Date
+                <input
+                  required
+                  type="date"
+                  value={editing.date}
+                  onChange={(e) =>
+                    setEditing({ ...editing, date: e.target.value })
+                  }
+                />
+              </label>
+              <label>
+                Type
+                <select
+                  value={editing.action}
+                  onChange={(e) =>
+                    setEditing({ ...editing, action: e.target.value })
+                  }
+                >
+                  <option value="in">In time</option>
+                  <option value="out">Out time</option>
+                </select>
+              </label>
+              <label>
+                Time
+                <input
+                  required
+                  type="time"
+                  value={editing.time}
+                  onChange={(e) =>
+                    setEditing({ ...editing, time: e.target.value })
+                  }
+                />
+              </label>
+            </div>
+            <label className="checkbox">
+              <input
+                type="checkbox"
+                checked={editing.overwrite}
+                onChange={(e) =>
+                  setEditing({ ...editing, overwrite: e.target.checked })
+                }
+              />
+              Overwrite existing attendance
+            </label>
+            {error && (
+              <p role="alert" className="error-text">
+                {error}
+              </p>
+            )}
+            {notice && <p role="status">{notice}</p>}
+            <div className="form-footer">
+              <button className="primary" disabled={busy}>
+                Approve entry
+              </button>
+            </div>
+          </form>
+        </div>
+      )}
       <h2>WhatsApp attendance</h2>
       <p>
         <strong>Connection:</strong>{" "}
@@ -263,7 +424,7 @@ export default function WhatsAppSettings({ api, employees, onReload }) {
           onClick={() =>
             action(async () => {
               await api("/whatsapp/connect", {});
-              setNotice("Preparing QR code. It will appear here when ready.");
+              setNotice("Preparing QR code…");
             })
           }
         >
@@ -282,6 +443,18 @@ export default function WhatsAppSettings({ api, employees, onReload }) {
           onClick={() => syncMessages()}
         >
           Sync latest messages
+        </button>
+        <button
+          className="button"
+          disabled={busy}
+          onClick={() =>
+            action(async () => {
+              await api("/whatsapp/sync/clear", {});
+              setNotice("Sync cleared.");
+            })
+          }
+        >
+          Clear stuck sync
         </button>
         <button
           className="button"
@@ -315,10 +488,6 @@ export default function WhatsAppSettings({ api, employees, onReload }) {
       {state.qrCode && (
         <div className="whatsapp-qr">
           <img src={state.qrCode} alt="WhatsApp device linking QR code" />
-          <p>
-            WhatsApp → Linked devices → Link a device. Scan this code using a
-            phone that belongs to the attendance group.
-          </p>
         </div>
       )}
       <form onSubmit={save}>
@@ -334,7 +503,6 @@ export default function WhatsAppSettings({ api, employees, onReload }) {
               required
               pattern="[a-zA-Z0-9_-]+"
             />
-            <small>Save before linking if you change this name.</small>
           </label>
           <label>
             Attendance group
@@ -350,7 +518,7 @@ export default function WhatsAppSettings({ api, employees, onReload }) {
                 })
               }
             >
-              <option value="">Load groups after linking your phone</option>
+              <option value="">Select group</option>
               {draft.groupId && !groups.some((g) => g.id === draft.groupId) && (
                 <option value={draft.groupId}>{draft.groupName}</option>
               )}
@@ -405,10 +573,6 @@ export default function WhatsAppSettings({ api, employees, onReload }) {
                 })
               }
             />
-            <small>
-              Example: 200 fetches up to 200 messages per sync. Remaining
-              history continues in later syncs.
-            </small>
           </label>
           <label>
             Auto-sync interval (minutes)
@@ -428,10 +592,6 @@ export default function WhatsAppSettings({ api, employees, onReload }) {
                 })
               }
             />
-            <small>
-              Example: 5 checks every 5 minutes while Dayline is running. Sync
-              lets you check immediately.
-            </small>
           </label>
         </div>
         <label className="checkbox">
@@ -441,6 +601,16 @@ export default function WhatsAppSettings({ api, employees, onReload }) {
             onChange={(e) => setDraft({ ...draft, enabled: e.target.checked })}
           />{" "}
           Enable automatic attendance
+        </label>
+        <label className="checkbox">
+          <input
+            type="checkbox"
+            checked={draft.allowEditedMessages ?? false}
+            onChange={(e) =>
+              setDraft({ ...draft, allowEditedMessages: e.target.checked })
+            }
+          />
+          Allow edited messages
         </label>
         <label className="checkbox">
           <input
@@ -467,13 +637,6 @@ export default function WhatsAppSettings({ api, employees, onReload }) {
           Save WhatsApp settings
         </button>
       </form>
-      <p>
-        Supported: <strong>IN</strong>, <strong>OUT</strong>,{" "}
-        <strong>In 9:30 AM</strong>, <strong>Out 18:15</strong>. Messages
-        without a time use the WhatsApp message timestamp in your selected
-        timezone. Other formats and conflicts stay in the review list. History
-        from before the first enable is excluded.
-      </p>
       <details className="whatsapp-link-details">
         <summary>Link an employee by phone number</summary>
         <form
@@ -489,9 +652,7 @@ export default function WhatsAppSettings({ api, employees, onReload }) {
                 employeeId: Number(data.get("employeeId")),
               });
               form.reset();
-              setNotice(
-                "Sender linked. Use Retry on their pending messages, starting with In time.",
-              );
+              setNotice("Sender linked.");
             });
           }}
         >
@@ -525,132 +686,159 @@ export default function WhatsAppSettings({ api, employees, onReload }) {
           </p>
         )}
       </details>
+      {state.config.resumeFromCache && <p role="status">Sync paused.</p>}
       {state.config.syncProgress && (
         <p role="status">
           {state.config.syncProgress.phase === "fetch"
-            ? `Checking history: ${state.config.syncProgress.scanned} messages fetched. Attendance is processed oldest first after this scan finishes.`
-            : "Applying checked messages in order. Remaining messages continue on the next sync."}
+            ? `Checking history: ${state.config.syncProgress.scanned} messages fetched.`
+            : "Applying messages…"}
         </p>
       )}
-      <h3>
-        {history ? "Cleared message history" : "Recent attendance messages"}
-      </h3>
-      <label className="checkbox">
-        <input
-          type="checkbox"
-          checked={history}
-          disabled={busy}
-          onChange={(e) => {
-            setHistory(e.target.checked);
-            setSelectedDays([]);
+      <div className="whatsapp-actions" role="group" aria-label="Message view">
+        <button
+          className={messageView === "attendance" ? "primary" : "button"}
+          aria-pressed={messageView === "attendance"}
+          onClick={() => setMessageView("attendance")}
+        >
+          Attendance messages
+        </button>
+        <button
+          className={messageView === "group" ? "primary" : "button"}
+          aria-pressed={messageView === "group"}
+          onClick={() => setMessageView("group")}
+        >
+          All group messages
+        </button>
+      </div>
+      {messageView === "group" ? (
+        <GroupMessages
+          key={state.config.sessionId + ":" + state.config.groupId}
+          api={api}
+          zone={zone}
+          onSelected={async (event) => {
+            await load();
+            setMessageView("attendance");
+            if (
+              event.state === "review" &&
+              (!event.isEdited || state.config.allowEditedMessages)
+            )
+              editEvent(event);
           }}
         />
-        Show cleared history
-      </label>
-      <p className="muted">
-        Automatic approval and overwrite only change today and yesterday, using
-        the group timezone. Older dates need manual approval.
-      </p>
-      <p>
-        {state.lastSync
-          ? `Last checked: ${new Date(state.lastSync).toLocaleString("en-GB", { timeZone: zone })}`
-          : "No sync completed yet."}{" "}
-        Dates use {zone}. Expand a day to view its messages.
-      </p>
-      <div className="whatsapp-day-actions">
-        <label>
-          Sync date
-          <input
-            type="date"
-            value={syncDate}
-            onChange={(e) => setSyncDate(e.target.value)}
-          />
-        </label>
-        <button
-          className="button"
-          disabled={busy || !syncDate || !state.config.enabled}
-          onClick={() => syncMessages({ dates: [syncDate] })}
-        >
-          Sync date
-        </button>
-        <button
-          className="button"
-          disabled={busy || !state.config.enabled}
-          onClick={() => syncMessages({ dates: [today] })}
-        >
-          Sync today
-        </button>
-        <button
-          className="button"
-          disabled={busy || !state.config.enabled}
-          onClick={() => syncMessages({ all: true })}
-        >
-          Sync all history
-        </button>
-      </div>
-      <div className="whatsapp-day-actions">
-        <label className="checkbox">
-          <input
-            type="checkbox"
-            disabled={busy || !days.length}
-            checked={
-              days.length > 0 &&
-              days.every((day) => selectedDays.includes(day.date))
-            }
-            onChange={(e) =>
-              setSelectedDays(
-                e.target.checked ? days.map((day) => day.date) : [],
-              )
-            }
-          />
-          Select all days
-        </label>
-        <button
-          className="button"
-          disabled={busy || !selectedDays.length || !state.config.enabled}
-          onClick={() => syncMessages({ dates: selectedDays })}
-        >
-          Sync selected days
-        </button>
-        <button
-          className="button"
-          disabled={busy || history || !selectedDays.length}
-          onClick={() => clearDays(selectedDays)}
-        >
-          Clear selected days
-        </button>
-      </div>
-      {days.map((day) => (
-        <div
-          className="whatsapp-message-day"
-          key={`${history}:${state.config.groupId}:${day.date}`}
-        >
-          <MessageDay
-            api={api}
-            day={day}
-            history={history}
-            today={today}
-            state={state}
-            renderEvent={renderEvent}
-            selected={selectedDays.includes(day.date)}
-            busy={busy}
-            onSelect={(checked) =>
-              setSelectedDays((old) =>
-                checked
-                  ? [...old, day.date]
-                  : old.filter((date) => date !== day.date),
-              )
-            }
-            onSync={() => syncMessages({ dates: [day.date] })}
-            onClear={() => clearDays([day.date])}
-          />
-        </div>
-      ))}
-      {!days.length && (
-        <p>
-          No messages in this view yet. Choose a date to sync its available
-          history.
-        </p>
+      ) : (
+        <>
+          <h3>
+            {history ? "Cleared message history" : "Recent attendance messages"}
+          </h3>
+          <label className="checkbox">
+            <input
+              type="checkbox"
+              checked={history}
+              disabled={busy}
+              onChange={(e) => {
+                setHistory(e.target.checked);
+                setSelectedDays([]);
+              }}
+            />
+            Show cleared history
+          </label>
+          <p>
+            {state.lastSync
+              ? `Last checked: ${new Date(state.lastSync).toLocaleString("en-GB", { timeZone: zone })}`
+              : "No sync completed yet."}{" "}
+            {zone}
+          </p>
+          <div className="whatsapp-day-actions">
+            <label>
+              Sync date
+              <input
+                type="date"
+                value={syncDate}
+                onChange={(e) => setSyncDate(e.target.value)}
+              />
+            </label>
+            <button
+              className="button"
+              disabled={busy || !syncDate || !state.config.enabled}
+              onClick={() => syncMessages({ dates: [syncDate] })}
+            >
+              Sync date
+            </button>
+            <button
+              className="button"
+              disabled={busy || !state.config.enabled}
+              onClick={() => syncMessages({ dates: [today] })}
+            >
+              Sync today
+            </button>
+            <button
+              className="button"
+              disabled={busy || !state.config.enabled}
+              onClick={() => syncMessages({ all: true })}
+            >
+              Sync all history
+            </button>
+          </div>
+          <div className="whatsapp-day-actions">
+            <label className="checkbox">
+              <input
+                type="checkbox"
+                disabled={busy || !days.length}
+                checked={
+                  days.length > 0 &&
+                  days.every((day) => selectedDays.includes(day.date))
+                }
+                onChange={(e) =>
+                  setSelectedDays(
+                    e.target.checked ? days.map((day) => day.date) : [],
+                  )
+                }
+              />
+              Select all days
+            </label>
+            <button
+              className="button"
+              disabled={busy || !selectedDays.length || !state.config.enabled}
+              onClick={() => syncMessages({ dates: selectedDays })}
+            >
+              Sync selected days
+            </button>
+            <button
+              className="button"
+              disabled={busy || history || !selectedDays.length}
+              onClick={() => clearDays(selectedDays)}
+            >
+              Clear selected days
+            </button>
+          </div>
+          {days.map((day) => (
+            <div
+              className="whatsapp-message-day"
+              key={`${history}:${state.config.groupId}:${day.date}`}
+            >
+              <MessageDay
+                api={api}
+                day={day}
+                history={history}
+                today={today}
+                state={state}
+                renderEvent={renderEvent}
+                selected={selectedDays.includes(day.date)}
+                busy={busy}
+                onSelect={(checked) =>
+                  setSelectedDays((old) =>
+                    checked
+                      ? [...old, day.date]
+                      : old.filter((date) => date !== day.date),
+                  )
+                }
+                onSync={() => syncMessages({ dates: [day.date] })}
+                onClear={() => clearDays([day.date])}
+              />
+            </div>
+          ))}
+          {!days.length && <p>No messages.</p>}
+        </>
       )}
     </section>
   );
@@ -805,7 +993,7 @@ function MessageDay({
                   <th>Sender</th>
                   <th>Message</th>
                   <th>Result</th>
-                  <th>Link / retry</th>
+                  <th>Actions</th>
                 </tr>
               </thead>
               <tbody>{events.map(renderEvent)}</tbody>

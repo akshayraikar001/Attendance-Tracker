@@ -1,3 +1,4 @@
+import { holidayAdjustedRecords } from "../../../../shared/calendar.js";
 import React, { useEffect, useRef, useState } from "react";
 import {
   LayoutDashboard,
@@ -37,15 +38,6 @@ const navigation = [
   ["Reports", ChartNoAxesCombined],
   ["Time away", Coffee],
 ];
-const descriptions = {
-  Dashboard: "A little clarity for your working day.",
-  "My attendance": "Your attendance history, all in one place.",
-  Calendar: "See your working days at a glance.",
-  Reports: "Understand your month and download your records.",
-  "Time away": "Your recorded departures and returns during a shift.",
-  "Location tracking":
-    "Check in at your visits and review your location history.",
-};
 const statusClass = (status) => status.toLowerCase().replaceAll(" ", "-");
 function Status({ value }) {
   return (
@@ -58,7 +50,7 @@ function Status({ value }) {
 export default function EmployeeWorkspace({ user, onLogout }) {
   const [page, setPage] = useState("Dashboard"),
     [profile, setProfile] = useState(null),
-    [records, setRecords] = useState([]),
+    [savedRecords, setRecords] = useState([]),
     [error, setError] = useState(""),
     [loading, setLoading] = useState(true),
     [date, setDate] = useState(today()),
@@ -66,6 +58,11 @@ export default function EmployeeWorkspace({ user, onLogout }) {
     [filter, setFilter] = useState("All statuses"),
     [menuOpen, setMenuOpen] = useState(false),
     [exporting, setExporting] = useState(false);
+  const records = holidayAdjustedRecords(
+    savedRecords,
+    profile?.holidays,
+    profile?.weeklyOffDays,
+  );
   const [theme, setTheme] = useTheme();
   const sidebar = useRef(null),
     menuButton = useRef(null);
@@ -144,6 +141,7 @@ export default function EmployeeWorkspace({ user, onLogout }) {
     try {
       await downloadAttendanceWorkbook(selected, {
         filename: `my-attendance-${month}.xlsx`,
+        employeeReport: true,
       });
     } catch (e) {
       setError(e.message);
@@ -167,7 +165,6 @@ export default function EmployeeWorkspace({ user, onLogout }) {
       : "Unmarked");
   const sum = (field) => selected.reduce((n, r) => n + (r[field] || 0), 0);
   const present = selected.filter((r) => r.status === "Present").length;
-  const measured = selected.filter((r) => r.workedMinutes != null);
   const monthLabel = new Date(month + "-01T12:00:00").toLocaleDateString(
     "en-US",
     { month: "long", year: "numeric" },
@@ -209,7 +206,7 @@ export default function EmployeeWorkspace({ user, onLogout }) {
               <th>In time</th>
               <th>Out time</th>
               <th>Worked</th>
-              <th>Late</th>
+              {page !== "Reports" && <th>Late</th>}
               <th>Overtime</th>
               <th>Notes</th>
             </tr>
@@ -229,7 +226,7 @@ export default function EmployeeWorkspace({ user, onLogout }) {
                 <td>
                   <WorkedTime entry={r} />
                 </td>
-                <td>{fmt(r.lateMinutes)}</td>
+                {page !== "Reports" && <td>{fmt(r.lateMinutes)}</td>}
                 <td>{fmt(r.overtimeMinutes)}</td>
                 <td className="attendance-note">{r.notes || "—"}</td>
               </tr>
@@ -240,11 +237,6 @@ export default function EmployeeWorkspace({ user, onLogout }) {
           <div className="employee-empty">
             <CalendarDays size={28} />
             <h3>No attendance to show</h3>
-            <p>
-              {filter === "All statuses"
-                ? "Records will appear here once attendance is added for this month."
-                : "Try another status or month to find your records."}
-            </p>
           </div>
         )}
       </div>
@@ -306,13 +298,6 @@ export default function EmployeeWorkspace({ user, onLogout }) {
             ))}
           </nav>
           <div className="employee-sidebar-footer">
-            <div className="employee-private">
-              <CheckCircle2 size={18} />
-              <div>
-                <strong>Just your attendance</strong>
-                <p>A personal view of your workdays and reports.</p>
-              </div>
-            </div>
             <button className="employee-signout" onClick={logout}>
               <LogOut size={18} />
               Sign out
@@ -380,7 +365,6 @@ export default function EmployeeWorkspace({ user, onLogout }) {
                     ? `Hello, ${user.name.split(" ")[0]}`
                     : page}
                 </h1>
-                <p>{descriptions[page]}</p>
               </div>
               <div className="employee-heading-actions">
                 {!["Calendar", "Time away", "Location tracking"].includes(
@@ -430,16 +414,8 @@ export default function EmployeeWorkspace({ user, onLogout }) {
                       <span className="employee-eyebrow">
                         TODAY · {shortDate(currentDate)}
                       </span>
-                      <h2>Your day, at a glance.</h2>
-                      <p>
-                        {dayStatus === "Unmarked"
-                          ? "Your attendance has not been recorded yet."
-                          : dayStatus === "Holiday"
-                            ? "A day off on your work calendar."
-                            : dayStatus === "In progress"
-                              ? "Your clock-in is recorded. Your day is still in progress."
-                              : "Your latest attendance is ready to view."}
-                      </p>
+                      <h2>Today</h2>
+
                       <button onClick={() => navigate("My attendance")}>
                         View my attendance <ArrowUpRight size={17} />
                       </button>
@@ -488,35 +464,26 @@ export default function EmployeeWorkspace({ user, onLogout }) {
                     </div>
                     <div className="employee-metrics">
                       {[
-                        [
-                          CheckCircle2,
-                          "Present days",
-                          present,
-                          "Full-day attendance",
-                          "green",
-                        ],
+                        [CheckCircle2, "Present days", present, "green"],
                         [
                           Clock3,
                           "Worked hours",
                           fmt(sum("workedMinutes")),
-                          `${measured.length} days with measured hours`,
                           "blue",
                         ],
                         [
                           Timer,
                           "Late arrivals",
                           selected.filter((r) => r.lateMinutes > 0).length,
-                          `${fmt(sum("lateMinutes"))} total late time`,
                           "amber",
                         ],
                         [
                           ArrowUpRight,
                           "Overtime",
                           fmt(sum("overtimeMinutes")),
-                          "Recorded extra hours",
                           "purple",
                         ],
-                      ].map(([Icon, label, value, hint, tone]) => (
+                      ].map(([Icon, label, value, tone]) => (
                         <article className="card employee-metric" key={label}>
                           <div>
                             <span className={"employee-metric-icon " + tone}>
@@ -525,7 +492,6 @@ export default function EmployeeWorkspace({ user, onLogout }) {
                             <span>{label}</span>
                           </div>
                           <strong>{value}</strong>
-                          <p>{hint}</p>
                         </article>
                       ))}
                     </div>
@@ -569,13 +535,9 @@ export default function EmployeeWorkspace({ user, onLogout }) {
                           </>
                         ) : (
                           <p className="employee-no-data">
-                            Your monthly breakdown will appear when attendance
-                            is recorded.
+                            No recorded attendance.
                           </p>
                         )}
-                        <p className="employee-chart-note">
-                          Based on recorded attendance only.
-                        </p>
                       </section>
                       <section className="card employee-week">
                         <div className="employee-section-heading">

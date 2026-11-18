@@ -215,10 +215,9 @@ try {
   );
   fireEvent.click(screen.getByRole("button", { name: "Record attendance" }));
   let dialog = screen.getByRole("dialog");
-  fireEvent.change(
-    within(dialog).getByPlaceholderText("Add a little context…"),
-    { target: { value: "First employee note" } },
-  );
+  fireEvent.change(within(dialog).getByRole("textbox", { name: /Notes/ }), {
+    target: { value: "First employee note" },
+  });
   fireEvent.submit(dialog.querySelector("form"));
   await waitFor(() => assert.equal(attendanceWrites, 1));
   await waitFor(() =>
@@ -237,7 +236,7 @@ try {
     target: { value: "2" },
   });
   assert.equal(
-    within(dialog).getByPlaceholderText("Add a little context…").value,
+    within(dialog).getByRole("textbox", { name: /Notes/ }).value,
     "Second employee note",
   );
   assert.equal(within(dialog).getByLabelText("In time").value, "10:00 AM");
@@ -255,8 +254,9 @@ try {
   assert.ok(screen.getByText("First Person"));
   assert.equal(screen.queryByText("Second Person"), null);
   console.log("PASS: simple daily report is the default and filters by group.");
+  document.querySelector(".account-menu").open = true;
   fireEvent.click(
-    within(document.querySelector(".sidebar")).getByRole("button", {
+    within(document.querySelector(".account-menu")).getByRole("button", {
       name: "Settings",
       exact: true,
     }),
@@ -316,6 +316,55 @@ try {
     }),
   );
   let dayPanel = screen.getByRole("region", { name: "Selected day report" });
+  const expandReport = within(dayPanel).getByRole("button", {
+    name: "Expand day report",
+  });
+  assert.equal(expandReport.getAttribute("aria-expanded"), "false");
+  assert.equal(within(dayPanel).queryByRole("table"), null);
+  assert.deepEqual(
+    [...calendar.querySelectorAll(".weekday")].map((el) => el.textContent),
+    ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"],
+  );
+  const firstDay = new Date(`${today.slice(0, 7)}-01T12:00:00`);
+  const grid = calendar.querySelector(".calendar-grid");
+  assert.equal(
+    [...grid.children].findIndex((el) =>
+      el.classList.contains("calendar-cell"),
+    ) - 7,
+    (firstDay.getDay() + 6) % 7,
+  );
+  fireEvent.click(expandReport);
+  assert.ok(within(dayPanel).getByRole("table"));
+  fireEvent.click(
+    within(dayPanel).getByRole("button", { name: "Collapse day report" }),
+  );
+  assert.equal(within(dayPanel).queryByRole("table"), null);
+  fireEvent.click(
+    within(dayPanel).getByRole("button", { name: "Expand day report" }),
+  );
+  const employeeFilter = screen.getByRole("combobox", {
+    name: "Calendar employee",
+  });
+  assert.equal(employeeFilter.value, "");
+  fireEvent.change(employeeFilter, { target: { value: "2" } });
+  assert.ok(within(dayPanel).getByText("Second Person"));
+  assert.equal(within(dayPanel).queryByText("First Person"), null);
+  const selectedDay = within(calendar).getByRole("button", {
+    name: new RegExp(`^View ${today}`),
+  });
+  assert.ok(within(selectedDay).getByText("In progress"));
+  assert.ok(within(selectedDay).getByText(/^In 10:00/));
+  assert.ok(within(selectedDay).getByText("Out —"));
+  assert.equal(within(selectedDay).queryByText("1 recorded"), null);
+  fireEvent.click(screen.getByRole("button", { name: "Record attendance" }));
+  const calendarEditor = screen.getByRole("dialog");
+  assert.equal(within(calendarEditor).getByLabelText("Employee").value, "2");
+  fireEvent.click(
+    within(calendarEditor).getByRole("button", { name: "Cancel" }),
+  );
+  fireEvent.change(employeeFilter, { target: { value: "" } });
+  assert.ok(within(dayPanel).getByText("First Person"));
+  assert.ok(within(dayPanel).getByText("Second Person"));
   const originalEntries = JSON.stringify(entries);
   fireEvent.change(within(dayPanel).getByPlaceholderText("Holiday name"), {
     target: { value: "Team holiday" },
@@ -347,13 +396,12 @@ try {
   dialog = screen.getByRole("dialog");
   assert.equal(within(dialog).getByLabelText("Date").value, today);
   assert.equal(
-    within(dialog).getByPlaceholderText("Add a little context…").value,
+    within(dialog).getByRole("textbox", { name: /Notes/ }).value,
     "Second employee note",
   );
-  fireEvent.change(
-    within(dialog).getByPlaceholderText("Add a little context…"),
-    { target: { value: "Edited from calendar" } },
-  );
+  fireEvent.change(within(dialog).getByRole("textbox", { name: /Notes/ }), {
+    target: { value: "Edited from calendar" },
+  });
   fireEvent.submit(dialog.querySelector("form"));
   await waitFor(() =>
     assert.equal(
@@ -509,8 +557,9 @@ try {
   console.log(
     "PASS: bulk form requires review, invalidates changed previews, defaults to preserving existing entries and skipping holidays, and applies only on request.",
   );
+  document.querySelector(".account-menu").open = true;
   fireEvent.click(
-    within(document.querySelector(".sidebar")).getByRole("button", {
+    within(document.querySelector(".account-menu")).getByRole("button", {
       name: "Settings",
       exact: true,
     }),
@@ -663,8 +712,9 @@ try {
     status: "Absent",
     notes: "Leave approved via WhatsApp",
   });
+  document.querySelector(".account-menu").open = true;
   fireEvent.click(
-    within(document.querySelector(".sidebar")).getByRole("button", {
+    within(document.querySelector(".account-menu")).getByRole("button", {
       name: "Settings",
       exact: true,
     }),
@@ -703,6 +753,7 @@ try {
   fireEvent.click(
     screen.getByRole("button", { name: "Calendar", exact: true }),
   );
+  fireEvent.click(screen.getByRole("button", { name: "Expand day report" }));
   fireEvent.change(screen.getByLabelText("Selected day"), {
     target: { value: "2026-10-12" },
   });
@@ -729,21 +780,12 @@ try {
     target: { value: "2026-10-13" },
   });
   assert.equal(screen.queryByText("Leave approved via WhatsApp"), null);
-  fireEvent.click(
-    screen.getByRole("button", { name: "Activity log", exact: true }),
+  assert.equal(
+    screen.queryByRole("button", { name: "Activity log", exact: true }),
+    null,
   );
-  assert.ok(screen.getByText("Attendance updated", { selector: "strong" }));
-  assert.ok(screen.getByText(new RegExp("First Person")));
-  fireEvent.change(screen.getByLabelText("Search activity"), {
-    target: { value: "unmatched" },
-  });
-  assert.ok(screen.getByText("No matching activity."));
-  fireEvent.change(screen.getByLabelText("Search activity"), {
-    target: { value: "First Person" },
-  });
-  assert.ok(screen.getByText("Attendance updated", { selector: "strong" }));
   console.log(
-    "PASS: break toggle, recurring weekday shifts, calendar absentee names and preview, one-day details filtering, and readable/searchable activity.",
+    "PASS: break toggle, recurring weekday shifts, calendar absentee names and preview, one-day details filtering, and removal of the activity log.",
   );
 } finally {
   cleanup();

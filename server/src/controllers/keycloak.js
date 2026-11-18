@@ -4,6 +4,7 @@ export const keycloakEnabled = () =>
   Boolean(
     process.env.KEYCLOAK_ISSUER &&
     process.env.KEYCLOAK_CLIENT_ID &&
+    process.env.KEYCLOAK_CLIENT_SECRET &&
     process.env.KEYCLOAK_REDIRECT_URI,
   );
 export function registerKeycloak({ app, wrap, query, loginSession }) {

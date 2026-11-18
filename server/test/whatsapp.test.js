@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
+  dayBounds,
   parseAttendanceMessage,
   senderIdentity,
 } from "../src/utils/whatsapp-parser.js";
@@ -252,4 +253,26 @@ test("mention display removes address tokens without changing email or ordinary 
     "Email staff@example.com about leave",
   );
   assert.equal(withoutMentions("@123456789012345@lid IN 10"), "IN 10");
+});
+
+test("WhatsApp calendar boundaries include entire yesterday across daylight saving changes", () => {
+  for (const [date, hours] of [
+    ["2026-03-08", 23],
+    ["2026-11-01", 25],
+  ]) {
+    const [start, end] = dayBounds(date, "America/New_York");
+    assert.equal(end - start, hours * 3600);
+    assert.equal(
+      parseAttendanceMessage("IN", start, "America/New_York").date,
+      date,
+    );
+    assert.equal(
+      parseAttendanceMessage("OUT", end - 1, "America/New_York").date,
+      date,
+    );
+    assert.notEqual(
+      parseAttendanceMessage("IN", end, "America/New_York").date,
+      date,
+    );
+  }
 });

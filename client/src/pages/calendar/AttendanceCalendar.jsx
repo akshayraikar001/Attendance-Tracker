@@ -30,8 +30,10 @@ export default function AttendanceCalendar({
   onEdit,
   onHolidaySave,
   canManageHolidays = true,
+  individual = false,
 }) {
   const clock = useTimeFormatter();
+  const [reportOpen, setReportOpen] = useState(false);
   const [month, setMonth] = useState(date.slice(0, 7));
   const [name, setName] = useState("");
   const [busy, setBusy] = useState(false);
@@ -149,41 +151,63 @@ export default function AttendanceCalendar({
                 Close preview
               </button>
             </div>
-            <div className="day-summary">
-              {statuses.map(([status, abbr]) => (
-                <span
-                  key={status}
-                  className={`calendar-summary-tile ${tone(status)}`}
-                  title={status}
+            {individual ? (
+              <div className="settings-inner">
+                <h3>{employees[0]?.name}</h3>
+                <p
+                  className={`calendar-status-badge ${tone(previewEntries[0]?.status || (previewHoliday ? "Holiday" : "Unmarked"))}`}
                 >
-                  <strong>
-                    {abbr}{" "}
-                    {
-                      previewPeople.filter((p) => p.attendanceStatus === status)
-                        .length
-                    }
-                  </strong>
-                  <span>{status}</span>
-                </span>
-              ))}
-            </div>
-            <h3>Absent employees</h3>
-            {previewPeople.some((p) => p.attendanceStatus === "Absent") ? (
-              <ul>
-                {previewPeople
-                  .filter((p) => p.attendanceStatus === "Absent")
-                  .map((p) => (
-                    <li key={p.id}>
-                      {p.name} <small className="muted">{p.department}</small>
-                    </li>
-                  ))}
-              </ul>
+                  {previewEntries[0]?.status ||
+                    (previewHoliday ? "Holiday" : "Unmarked")}
+                </p>
+                <p>
+                  In {clock(previewEntries[0]?.inTime)} · Out{" "}
+                  {clock(previewEntries[0]?.outTime)}
+                  {previewEntries[0]?.overnight ? " (+1 day)" : ""}
+                </p>
+                <p>
+                  Recorded hours · {hours(previewEntries[0]?.workedMinutes)}
+                </p>
+                {previewHoliday && <p>Holiday · {previewHoliday.name}</p>}
+              </div>
             ) : (
-              <p className="muted">No employees marked Absent.</p>
+              <>
+                <div className="day-summary">
+                  {statuses.map(([status, abbr]) => (
+                    <span
+                      key={status}
+                      className={`calendar-summary-tile ${tone(status)}`}
+                      title={status}
+                    >
+                      <strong>
+                        {abbr}{" "}
+                        {
+                          previewPeople.filter(
+                            (p) => p.attendanceStatus === status,
+                          ).length
+                        }
+                      </strong>
+                      <span>{status}</span>
+                    </span>
+                  ))}
+                </div>
+                <h3>Absent employees</h3>
+                {previewPeople.some((p) => p.attendanceStatus === "Absent") ? (
+                  <ul>
+                    {previewPeople
+                      .filter((p) => p.attendanceStatus === "Absent")
+                      .map((p) => (
+                        <li key={p.id}>
+                          {p.name}{" "}
+                          <small className="muted">{p.department}</small>
+                        </li>
+                      ))}
+                  </ul>
+                ) : (
+                  <p className="muted">No employees marked Absent.</p>
+                )}
+              </>
             )}
-            <p className="muted">
-              Unmarked attendance is counted separately, not as absence.
-            </p>
           </section>
         </div>
       )}
@@ -228,9 +252,7 @@ export default function AttendanceCalendar({
             </button>
           </div>
         </div>
-        <p className="calendar-hint">
-          Select a day to view its report, edit attendance, or manage a holiday.
-        </p>
+
         <div className="calendar-legend" aria-label="Attendance colour legend">
           {statuses.map(([status, abbreviation]) => (
             <span key={status} className={tone(status)}>
@@ -240,18 +262,21 @@ export default function AttendanceCalendar({
           ))}
         </div>
         <div className="calendar-grid">
-          {["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"].map((d) => (
+          {["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"].map((d) => (
             <span className="weekday" key={d}>
               {d}
             </span>
           ))}
-          {Array.from({ length: first.getDay() }, (_, i) => (
+          {Array.from({ length: (first.getDay() + 6) % 7 }, (_, i) => (
             <span key={`blank-${i}`} />
           ))}
           {Array.from({ length: count }, (_, i) => {
             const key = `${month}-${String(i + 1).padStart(2, "0")}`;
             const h = holidayForDate(key, holidays, weeklyOffDays);
             const entries = recordsByDate.get(key) || [];
+            const entry = individual ? entries[0] : null;
+            const individualStatus =
+              entry?.status || (h ? "Holiday" : "Unmarked");
             const absent = entries
               .filter((r) => r.status === "Absent")
               .map(
@@ -276,7 +301,9 @@ export default function AttendanceCalendar({
               (n, r) => n + r.workedMinutes,
               0,
             );
-            const description = `${worked.length ? hours(totalMinutes) + " recorded hours. " : "No measured hours. "}${counts.map((s) => `${s.count} ${s.status}`).join(", ")}`;
+            const description = individual
+              ? `${employees[0]?.name || "Employee"}: ${individualStatus}. In ${clock(entry?.inTime)}, Out ${clock(entry?.outTime)}${entry?.overnight ? " (+1 day)" : ""}. ${hours(entry?.workedMinutes)} recorded hours.`
+              : `${worked.length ? hours(totalMinutes) + " recorded hours. " : "No measured hours. "}${counts.map((s) => `${s.count} ${s.status}`).join(", ")}`;
             return (
               <div className="calendar-cell" key={key}>
                 <button
@@ -310,26 +337,45 @@ export default function AttendanceCalendar({
                       />
                     ))}
                   </span>
-                  <span className="calendar-day-counts" aria-hidden="true">
-                    {counts
-                      .filter((s) => s.status !== "Unmarked")
-                      .map((s) => (
-                        <span key={s.status} className={tone(s.status)}>
-                          {s.abbreviation} {s.count}
+                  {individual ? (
+                    <>
+                      <span
+                        className={`calendar-individual-status ${tone(individualStatus)}`}
+                      >
+                        {individualStatus}
+                      </span>
+                      <span className="calendar-individual-times">
+                        <span>In {clock(entry?.inTime)}</span>
+                        <span>
+                          Out {clock(entry?.outTime)}
+                          {entry?.overnight ? " (+1 day)" : ""}
                         </span>
-                      ))}
-                  </span>
-                  <small className="calendar-recorded">
-                    {entries.length} recorded
-                  </small>
-                  {!!absent.length && (
-                    <span
-                      className="calendar-absentees"
-                      title={absent.join(", ")}
-                    >
-                      Absent: {absent.slice(0, 2).join(", ")}
-                      {absent.length > 2 ? ` +${absent.length - 2}` : ""}
-                    </span>
+                      </span>
+                    </>
+                  ) : (
+                    <>
+                      <span className="calendar-day-counts" aria-hidden="true">
+                        {counts
+                          .filter((s) => s.status !== "Unmarked")
+                          .map((s) => (
+                            <span key={s.status} className={tone(s.status)}>
+                              {s.abbreviation} {s.count}
+                            </span>
+                          ))}
+                      </span>
+                      <small className="calendar-recorded">
+                        {entries.length} recorded
+                      </small>
+                      {!!absent.length && (
+                        <span
+                          className="calendar-absentees"
+                          title={absent.join(", ")}
+                        >
+                          Absent: {absent.slice(0, 2).join(", ")}
+                          {absent.length > 2 ? ` +${absent.length - 2}` : ""}
+                        </span>
+                      )}
+                    </>
                   )}
                   <span
                     className="calendar-sr-only"
@@ -359,142 +405,155 @@ export default function AttendanceCalendar({
             <h2>Day report · {date}</h2>
             <p>
               {holiday ? `Holiday · ${holiday.name}` : "Working day"} ·{" "}
-              {rows.length} employees
+              {individual ? employees[0]?.name : `${rows.length} employees`}
             </p>
           </div>
-        </div>
-        <div className="settings-inner">
-          <DateNavigator
-            label="Selected day"
-            value={date}
-            onChange={(v) => v && setDate(v)}
-          />
-        </div>
-        <div className="day-summary">
-          {summary.map(([status, count]) => (
-            <span
-              key={status}
-              className={`calendar-summary-tile ${tone(status)}`}
-            >
-              <strong>{count}</strong>
-              <span>{status}</span>
-            </span>
-          ))}
-          <span className="calendar-summary-tile calendar-total-hours">
-            <strong>
-              <Clock size={16} aria-hidden="true" />{" "}
-              {hours(
-                dayRecords.reduce((n, r) => n + (r.workedMinutes || 0), 0),
-              )}
-            </strong>
-            <span>Recorded hours</span>
-          </span>
-        </div>
-        {canManageHolidays && (
-          <form
-            className="holiday-editor"
-            onSubmit={(e) => {
-              e.preventDefault();
-              saveHoliday(true);
-            }}
+          <button
+            className="button"
+            aria-expanded={reportOpen}
+            aria-controls="calendar-day-report-content"
+            onClick={() => setReportOpen((open) => !open)}
           >
-            <label htmlFor="holiday-name">
-              {holiday ? "Edit holiday" : "Mark this day as a holiday"}
-            </label>
-            <div className="heading-actions">
-              <input
-                id="holiday-name"
-                placeholder="Holiday name"
-                required
-                maxLength={100}
-                value={name}
-                disabled={busy}
-                onChange={(e) => setName(e.target.value)}
-              />
-              <button className="primary" disabled={busy || !name.trim()}>
-                {busy ? "Saving…" : holiday ? "Save holiday" : "Add holiday"}
-              </button>
-              {holiday && !holiday.weekly && (
-                <button
-                  className="button"
-                  type="button"
+            {reportOpen ? "Collapse day report" : "Expand day report"}
+          </button>
+        </div>
+        <div id="calendar-day-report-content" hidden={!reportOpen}>
+          <div className="settings-inner">
+            <DateNavigator
+              label="Selected day"
+              value={date}
+              onChange={(v) => v && setDate(v)}
+            />
+          </div>
+          <div className="day-summary">
+            {summary.map(([status, count]) => (
+              <span
+                key={status}
+                className={`calendar-summary-tile ${tone(status)}`}
+              >
+                <strong>{count}</strong>
+                <span>{status}</span>
+              </span>
+            ))}
+            <span className="calendar-summary-tile calendar-total-hours">
+              <strong>
+                <Clock size={16} aria-hidden="true" />{" "}
+                {hours(
+                  dayRecords.reduce((n, r) => n + (r.workedMinutes || 0), 0),
+                )}
+              </strong>
+              <span>Recorded hours</span>
+            </span>
+          </div>
+          {canManageHolidays && (
+            <form
+              className="holiday-editor"
+              onSubmit={(e) => {
+                e.preventDefault();
+                saveHoliday(true);
+              }}
+            >
+              <label htmlFor="holiday-name">
+                {holiday ? "Edit holiday" : "Mark this day as a holiday"}
+              </label>
+              <div className="heading-actions">
+                <input
+                  id="holiday-name"
+                  placeholder="Holiday name"
+                  required
+                  maxLength={100}
+                  value={name}
                   disabled={busy}
-                  onClick={() => saveHoliday(false)}
-                >
-                  Remove holiday
+                  onChange={(e) => setName(e.target.value)}
+                />
+                <button className="primary" disabled={busy || !name.trim()}>
+                  {busy ? "Saving…" : holiday ? "Save holiday" : "Add holiday"}
                 </button>
+                {holiday && !holiday.weekly && (
+                  <button
+                    className="button"
+                    type="button"
+                    disabled={busy}
+                    onClick={() => saveHoliday(false)}
+                  >
+                    Remove holiday
+                  </button>
+                )}
+              </div>
+              <p>
+                Applies to all employees. Recorded attendance and hours are
+                preserved.
+              </p>
+              {error && (
+                <p className="error-text" role="alert">
+                  {error}
+                </p>
               )}
-            </div>
-            <p>
-              Applies to all employees. Recorded attendance and hours are
-              preserved.
-            </p>
-            {error && (
-              <p className="error-text" role="alert">
-                {error}
+            </form>
+          )}
+          <div className="table-scroll">
+            <table className="calendar-people-table" role="table">
+              <thead>
+                <tr>
+                  <th>Employee</th>
+                  <th>In / Out</th>
+                  <th>Hours</th>
+                  <th>Status</th>
+                  <th>Action</th>
+                </tr>
+              </thead>
+              <tbody>
+                {rows.map(({ entry, ...e }) => (
+                  <tr key={e.id}>
+                    <td
+                      data-label="Employee"
+                      className="calendar-employee-name"
+                    >
+                      {e.name}
+                      <small className="calendar-department">
+                        {e.department}
+                      </small>
+                    </td>
+                    <td data-label="In / Out">
+                      {clock(entry?.inTime)} / {clock(entry?.outTime)}
+                      {entry?.overnight ? " (+1 day)" : ""}
+                    </td>
+                    <td data-label="Hours">
+                      <span
+                        className={`calendar-hours-badge ${tone(entry?.status || (holiday ? "Holiday" : "Unmarked"))}`}
+                      >
+                        {hours(entry?.workedMinutes)}
+                      </span>
+                    </td>
+                    <td data-label="Status">
+                      <span
+                        className={`calendar-status-badge ${tone(entry?.status || (holiday ? "Holiday" : "Unmarked"))}`}
+                      >
+                        {entry?.status || (holiday ? "Holiday" : "Unmarked")}
+                      </span>
+                    </td>
+                    <td data-label="Action" className="calendar-edit-cell">
+                      {onEdit && (
+                        <button
+                          className="button"
+                          disabled={e.status !== "Active"}
+                          aria-label={`Edit attendance for ${e.name}`}
+                          onClick={() => onEdit({ employeeId: e.id, date })}
+                        >
+                          {entry ? "Edit" : "Record"}
+                        </button>
+                      )}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+            {!rows.length && (
+              <p className="empty">
+                Add employees to start recording attendance.
               </p>
             )}
-          </form>
-        )}
-        <div className="table-scroll">
-          <table className="calendar-people-table" role="table">
-            <thead>
-              <tr>
-                <th>Employee</th>
-                <th>In / Out</th>
-                <th>Hours</th>
-                <th>Status</th>
-                <th>Action</th>
-              </tr>
-            </thead>
-            <tbody>
-              {rows.map(({ entry, ...e }) => (
-                <tr key={e.id}>
-                  <td data-label="Employee" className="calendar-employee-name">
-                    {e.name}
-                    <small className="calendar-department">
-                      {e.department}
-                    </small>
-                  </td>
-                  <td data-label="In / Out">
-                    {clock(entry?.inTime)} / {clock(entry?.outTime)}
-                    {entry?.overnight ? " (+1 day)" : ""}
-                  </td>
-                  <td data-label="Hours">
-                    <span
-                      className={`calendar-hours-badge ${tone(entry?.status || (holiday ? "Holiday" : "Unmarked"))}`}
-                    >
-                      {hours(entry?.workedMinutes)}
-                    </span>
-                  </td>
-                  <td data-label="Status">
-                    <span
-                      className={`calendar-status-badge ${tone(entry?.status || (holiday ? "Holiday" : "Unmarked"))}`}
-                    >
-                      {entry?.status || (holiday ? "Holiday" : "Unmarked")}
-                    </span>
-                  </td>
-                  <td data-label="Action" className="calendar-edit-cell">
-                    {onEdit && (
-                      <button
-                        className="button"
-                        disabled={e.status !== "Active"}
-                        aria-label={`Edit attendance for ${e.name}`}
-                        onClick={() => onEdit({ employeeId: e.id, date })}
-                      >
-                        {entry ? "Edit" : "Record"}
-                      </button>
-                    )}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-          {!rows.length && (
-            <p className="empty">
-              Add employees to start recording attendance.
-            </p>
-          )}
+          </div>
         </div>
       </section>
     </div>

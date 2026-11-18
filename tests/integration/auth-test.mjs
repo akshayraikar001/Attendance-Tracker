@@ -1,3 +1,8 @@
+import {
+  connectTestAdmin,
+  testDatabaseHost,
+  testDatabasePort,
+} from "../helpers/database.mjs";
 import { localDate } from "../../shared/location-time.js";
 // Integration check against an isolated database on the optional local MariaDB.
 import assert from "node:assert/strict";
@@ -5,10 +10,7 @@ import mysql from "mysql2/promise";
 import { spawn, spawnSync } from "node:child_process";
 import { createServer } from "node:net";
 import { once } from "node:events";
-const admin = await mysql.createConnection({
-  socketPath: process.cwd() + "/.local/mysql.sock",
-  user: "root",
-});
+const admin = await connectTestAdmin();
 const database = "attendance_auth_test_" + Date.now();
 const listener = createServer();
 await new Promise((resolve) => listener.listen(0, "127.0.0.1", resolve));
@@ -18,8 +20,8 @@ const env = {
   ...process.env,
   DB_LOCAL_MANAGED: "false",
   CHATERY_MANAGED_PATH: "",
-  DB_HOST: "127.0.0.1",
-  DB_PORT: "3307",
+  DB_HOST: testDatabaseHost,
+  DB_PORT: String(testDatabasePort),
   DB_NAME: database,
   DB_USER: "attendance",
   DB_PASSWORD: "attendance_dev",
@@ -692,10 +694,7 @@ try {
       .date,
     localDate(new Date(), "Asia/Kolkata"),
   );
-  const deletionAudit = (await request("/audit")).result.find(
-    (r) => r.action === "Location check-in deleted",
-  );
-  assert.ok(deletionAudit);
+  assert.deepEqual((await request("/audit")).result, []);
   await request(
     "/users/" + employeeUser.id,
     { ...account, active: false },

@@ -68,7 +68,7 @@ const api = async (path, body, method) => {
     state.total = 0;
     return { ok: true, days: 3 };
   }
-  if (path.endsWith("/reject")) {
+  if (path.endsWith("/reject") || path.endsWith("/reviewed") || path.endsWith("/pending")) {
     state.requests = [];
     state.total = 0;
     return { ok: true };
@@ -179,6 +179,38 @@ try {
   assert.equal(screen.getByLabelText("From date").value, "");
   fireEvent.click(screen.getByRole("button", { name: "Reject request" }));
   await screen.findByText("Request rejected.");
+  assert.equal(reloaded, 1);
+  cleanup();
+  state.enabled = false;
+  state.requests = [
+    {
+      id: "c".repeat(64),
+      senderName: "Manually entered",
+      timestamp: 1791280800,
+      text: "Leave today",
+      kind: "Absent",
+      state: "pending",
+    },
+  ];
+  state.total = 1;
+  render(React.createElement(Component, props));
+  const dismiss = await screen.findByRole("button", {
+    name: "Already reviewed",
+  });
+  assert.equal(dismiss.disabled, false);
+  fireEvent.click(dismiss);
+  await screen.findByText("Already reviewed. Attendance has not changed.");
+  assert.equal(reloaded, 1);
+  assert.equal(calls.filter((c) => c.path.endsWith("/reviewed")).length, 1);
+  cleanup();
+  state.requests = [{ id: "c".repeat(64), senderName: "Manually entered", timestamp: 1791280800, text: "Leave today", kind: "Absent", state: "reviewed" }];
+  state.total = 1;
+  render(React.createElement(Component, props));
+  const restore = await screen.findByRole("button", { name: "Move to pending" });
+  assert.equal(restore.disabled, false);
+  fireEvent.click(restore);
+  await screen.findByText("Moved to pending. Attendance has not changed.");
+  assert.equal(calls.filter((c) => c.path.endsWith("/pending")).length, 1);
   assert.equal(reloaded, 1);
   console.log(
     "PASS: opt-in gate, shared settings/sync, manual review, suggested dates, conflict protection, overwrite confirmation/cancellation, attendance refresh, unmatched sender and rejection.",

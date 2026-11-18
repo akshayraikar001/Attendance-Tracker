@@ -82,10 +82,6 @@ export default function TimingSettings({
         <div className="card-heading">
           <div>
             <h2>Custom & group timings</h2>
-            <p>
-              Employee timings take priority over group timings. Groups inherit
-              workspace timings unless customized.
-            </p>
           </div>
         </div>
         <div className="timing-picker form-grid">
@@ -146,11 +142,7 @@ export default function TimingSettings({
                 />
                 Deduct a 1-hour break
               </label>
-              <p className="muted">
-                Off by default. When enabled, worked hours = In-to-Out duration
-                minus 1 hour (minimum zero). Status and overtime use the reduced
-                hours.
-              </p>
+
               <label className="checkbox">
                 <input
                   type="checkbox"
@@ -164,12 +156,7 @@ export default function TimingSettings({
                 />
                 Automatic Out time
               </label>
-              <p className="muted">
-                When In time exists and Out time is missing, save the chosen
-                time after the cutoff. Example: check after 8 PM and save 7:05
-                PM. Overnight shifts and In times at or after the saved time are
-                excluded. A cleared automatic time is not added again.
-              </p>
+
               <div className="form-grid">
                 <label>
                   Check after
@@ -203,11 +190,7 @@ export default function TimingSettings({
                 />
                 Catch up missed automatic Out times after reopening
               </label>
-              <p className="muted">
-                When off, only today's missing Out times are filled. The server
-                must be running to perform checks. Times use the attendance
-                timezone below.
-              </p>
+
               <label>
                 Attendance timezone
                 <input
@@ -229,13 +212,6 @@ export default function TimingSettings({
                 />
                 Automatically mark absent after day end
               </label>
-              <p className="muted">
-                Off by default. After midnight in the attendance timezone, mark
-                active employees Absent only when no attendance exists. Holidays
-                and saved statuses/times are preserved; overnight shifts wait
-                until shift end. Starts from the day enabled and catches up when
-                the server reopens.
-              </p>
             </div>
           )}
           <div className="form-grid">
@@ -274,11 +250,7 @@ export default function TimingSettings({
           </div>
           <details className="weekday-shift-settings">
             <summary>Day-specific shift times</summary>
-            <p className="muted">
-              Repeat each week. Full-day, half-day and overtime thresholds stay
-              as configured above. Employee day overrides take priority over
-              department and workspace day overrides.
-            </p>
+
             {weekdays.map((day, index) => (
               <div className="weekday-shift-row" key={day}>
                 <label className="checkbox">

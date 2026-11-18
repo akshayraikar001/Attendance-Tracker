@@ -85,7 +85,7 @@ try {
       .getAttribute("aria-current"),
     "page",
   );
-  assert.ok(screen.getByRole("heading", { name: "Your day, at a glance." }));
+  assert.ok(screen.getByRole("heading", { name: "Hello, Employee" }));
   fireEvent.click(screen.getByRole("button", { name: "Open navigation" }));
   assert.equal(
     screen

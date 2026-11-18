@@ -19,7 +19,7 @@ async function settings() {
 export async function chateryRequest(
   route,
   body,
-  { missingOK = false, method } = {},
+  { missingOK = false, method, timeoutMs = 15000 } = {},
 ) {
   const { base, key } = await settings();
   let res;
@@ -28,7 +28,7 @@ export async function chateryRequest(
       method: method || (body ? "POST" : "GET"),
       headers: { "Content-Type": "application/json", "X-Api-Key": key },
       ...(body ? { body: JSON.stringify(body) } : {}),
-      signal: AbortSignal.timeout(15000),
+      signal: AbortSignal.timeout(timeoutMs),
     });
   } catch {
     throw Object.assign(

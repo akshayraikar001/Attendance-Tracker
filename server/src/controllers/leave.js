@@ -24,7 +24,7 @@ export function registerLeave({
     wrap(async (req, res) => {
       const cfg = await whatsapp.config();
       const filter = z
-        .enum(["pending", "approved", "rejected", "all"])
+        .enum(["pending", "approved", "rejected", "reviewed", "all"])
         .default("pending")
         .parse(req.query.state);
       const offset = z.coerce
@@ -249,6 +249,58 @@ export function registerLeave({
         );
         if (!result.affectedRows) throw fail("Pending request not found.", 409);
         await audit(c, "WhatsApp leave rejected", "whatsapp", 1, {
+          requestId: id,
+          actorId: req.user.id,
+        });
+      });
+      res.json({ ok: true });
+    }),
+  );
+  app.post(
+    "/api/leave/:id/reviewed",
+    wrap(async (req, res) => {
+      const id = z
+        .string()
+        .regex(/^[a-f0-9]{64}$/)
+        .parse(req.params.id);
+      await transaction(async (c) => {
+        await c.execute("SELECT id FROM settings WHERE id=1 FOR UPDATE");
+        const [configs] = await c.execute(
+          "SELECT config FROM whatsapp_config WHERE id=1",
+        );
+        const cfg = parse(configs[0].config);
+        const [result] = await c.execute(
+          "UPDATE leave_requests SET state='reviewed',decidedBy=?,decidedAt=NOW() WHERE id=? AND state='pending' AND sessionId=? AND groupId=?",
+          [req.user.id, id, cfg.sessionId, cfg.groupId],
+        );
+        if (!result.affectedRows) throw fail("Pending request not found.", 409);
+        await audit(c, "WhatsApp leave already reviewed", "whatsapp", 1, {
+          requestId: id,
+          actorId: req.user.id,
+        });
+      });
+      res.json({ ok: true });
+    }),
+  );
+  app.post(
+    "/api/leave/:id/pending",
+    wrap(async (req, res) => {
+      const id = z
+        .string()
+        .regex(/^[a-f0-9]{64}$/)
+        .parse(req.params.id);
+      await transaction(async (c) => {
+        await c.execute("SELECT id FROM settings WHERE id=1 FOR UPDATE");
+        const [configs] = await c.execute(
+          "SELECT config FROM whatsapp_config WHERE id=1",
+        );
+        const cfg = parse(configs[0].config);
+        const [result] = await c.execute(
+          "UPDATE leave_requests SET state='pending',decidedBy=NULL,decidedAt=NULL WHERE id=? AND state='reviewed' AND sessionId=? AND groupId=?",
+          [id, cfg.sessionId, cfg.groupId],
+        );
+        if (!result.affectedRows) throw fail("Reviewed request not found.", 409);
+        await audit(c, "WhatsApp leave restored to pending", "whatsapp", 1, {
           requestId: id,
           actorId: req.user.id,
         });

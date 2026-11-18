@@ -15,7 +15,7 @@
     "db:setup": "node server/src/database/setup.js",
     "db:local": "bash scripts/local-db.sh",
     "format": "prettier --write client/src server/src server/test tests shared",
-    "test:ui": "node tests/ui/ui-test.mjs && npm run test:attendance:ui",
+    "test:ui": "node tests/ui/ui-test.mjs && npm run test:attendance:ui && node tests/ui/report-bulk-ui-test.mjs",
     "test:attendance:ui": "node tests/ui/attendance-editor-test.mjs",
     "test:export": "node tests/integration/export-test.mjs",
     "test:holidays": "node tests/integration/holiday-test.mjs",
@@ -31,7 +31,11 @@
     "test:employee:ui": "node tests/ui/employee-ui-test.mjs",
     "test:users:ui": "node tests/ui/user-management-test.mjs",
     "test:locations:ui": "node tests/ui/locations-ui-test.mjs",
-    "test:time-away:ui": "node tests/ui/time-away-ui-test.mjs"
+    "test:time-away:ui": "node tests/ui/time-away-ui-test.mjs",
+    "keycloak:check": "node scripts/keycloak-check.mjs",
+    "test:employee-reports": "node tests/integration/employee-reports-test.mjs",
+    "test:employee-reports:ui": "node tests/ui/employee-reports-ui-test.mjs",
+    "check": "node scripts/check.mjs"
   },
   "devDependencies": {
     "@testing-library/react": "^16.3.3",

@@ -403,7 +403,10 @@ main {
 }
 .heading-actions {
   display: flex;
+  flex-wrap: wrap;
   gap: 9px;
+  min-width: 0;
+  max-width: 100%;
 }
 .button,
 .primary {
@@ -414,7 +417,10 @@ main {
   color: #525b54;
   font-size: 14px;
   font-weight: 500;
-  white-space: nowrap;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  min-width: 0;
+  max-width: 100%;
   box-shadow: 0 1px 2px #182e1610;
 }
 .primary {
@@ -481,6 +487,7 @@ main {
   margin-bottom: 23px;
 }
 .stat-card {
+  min-width: 0;
   background: #fff;
   border: 1px solid var(--border);
   border-radius: 9px;
@@ -489,12 +496,18 @@ main {
 }
 .stat-top {
   display: flex;
+  gap: 10px;
   align-items: center;
   justify-content: space-between;
   color: #7b827c;
   font-size: 14px;
 }
+.stat-top > span:first-child {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
 .stat-icon {
+  flex-shrink: 0;
   width: 30px;
   height: 30px;
   border-radius: 8px;
@@ -524,11 +537,19 @@ main {
   display: flex;
   gap: 13px;
   align-items: center;
-  margin: 6px 0 12px;
+  margin: 8px 0 0;
   letter-spacing: -0.7px;
-  white-space: nowrap;
+  line-height: 1.25;
+  flex-wrap: wrap;
+  white-space: normal;
+  overflow-wrap: anywhere;
 }
 .stat-sub {
+  flex: 1 1 110px;
+  min-width: 0;
+  max-width: 100%;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
   font-family: "DM Sans", sans-serif;
   font-size: 14px;
   font-weight: 400;
@@ -558,10 +579,33 @@ main {
 }
 .card-heading {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
   gap: 14px;
   padding: 20px 21px 15px;
+}
+.card-heading > *,
+.page-heading > *,
+.employee-section-heading > *,
+.form-grid > * {
+  min-width: 0;
+  max-width: 100%;
+}
+.card-heading h2,
+.page-heading h1,
+.employee-section-heading h2,
+.employee-metric strong {
+  overflow-wrap: anywhere;
+}
+.chart-legend {
+  flex-wrap: wrap;
+}
+.stat-icon svg,
+.employee-metric-icon,
+.checkbox input,
+.chart-legend i {
+  flex-shrink: 0;
 }
 .card-heading p {
   font-size: 14px;
@@ -1457,9 +1501,6 @@ textarea {
   .topbar {
     padding: 0 25px;
   }
-  .stat-sub {
-    display: none;
-  }
   .chart-legend {
     gap: 6px;
     font-size: 14px;
@@ -2170,10 +2211,13 @@ textarea {
   white-space: normal;
   min-width: 130px;
 }
-.report-tabs {
+.tabs.report-tabs {
+  flex-wrap: nowrap;
+  max-width: 100%;
   overflow-x: auto;
 }
 .report-tabs button {
+  flex-shrink: 0;
   white-space: nowrap;
 }
 @media print {
@@ -3038,6 +3082,44 @@ textarea {
 .bulk-selection-header label {
   flex: 1;
 }
+.bulk-clear-selection {
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  border: 1px solid #e2a39c;
+  border-radius: 5px;
+  background: #fff0ef;
+  color: #c0392b;
+  font-size: 23px;
+  line-height: 26px;
+  cursor: pointer;
+}
+.bulk-clear-selection:hover {
+  background: #f9d8d4;
+}
+.bulk-select-all {
+  justify-self: start;
+}
+.attendance-status-select.present {
+  color: #668d69;
+  border-color: #b9d7bd;
+}
+.attendance-status-select.absent {
+  color: #c0392b;
+  border-color: #e2a39c;
+}
+.attendance-status-select.half-day {
+  color: #b08b35;
+  border-color: #e6d39d;
+}
+.attendance-status-select.attended {
+  color: #386fa4;
+  border-color: #a9c6e1;
+}
+.attendance-status-select option.present { color: #668d69; }
+.attendance-status-select option.absent { color: #c0392b; }
+.attendance-status-select option.half-day { color: #b08b35; }
+.attendance-status-select option.attended { color: #386fa4; }
 .bulk-employees {
   display: grid;
   grid-template-columns: 1fr 1fr;
@@ -3232,15 +3314,18 @@ textarea {
   color: inherit;
   opacity: 0.8;
 }
-.month-cell.present {
+.month-cell.present,
+.month-table .month-status-total.present {
   color: #246b3a;
   background: #edf8ef;
 }
-.month-cell.absent {
+.month-cell.absent,
+.month-table .month-status-total.absent {
   color: #a83b34;
   background: #fff0ed;
 }
-.month-cell.half-day {
+.month-cell.half-day,
+.month-table .month-status-total.half-day {
   color: #866413;
   background: #fff6df;
 }
@@ -3260,15 +3345,18 @@ textarea {
 .month-cell.unmarked {
   color: #a5aca0;
 }
-[data-theme="dark"] .month-cell.present {
+[data-theme="dark"] .month-cell.present,
+[data-theme="dark"] .month-table .month-status-total.present {
   color: #96d6aa;
   background: #203629;
 }
-[data-theme="dark"] .month-cell.absent {
+[data-theme="dark"] .month-cell.absent,
+[data-theme="dark"] .month-table .month-status-total.absent {
   color: #f2a49d;
   background: #3d2826;
 }
-[data-theme="dark"] .month-cell.half-day {
+[data-theme="dark"] .month-cell.half-day,
+[data-theme="dark"] .month-table .month-status-total.half-day {
   color: #ecd18c;
   background: #3c3320;
 }
@@ -3646,6 +3734,7 @@ textarea {
 }
 .account-menu-panel button {
   display: flex;
+  justify-content: flex-start;
   align-items: center;
   gap: 8px;
   padding: 10px;
@@ -4312,6 +4401,7 @@ textarea {
 }
 .employee-section-heading {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
   gap: 14px;
@@ -4351,6 +4441,10 @@ textarea {
   gap: 10px;
   font-size: 12px;
   font-weight: 550;
+}
+.employee-metric > div > span:last-child {
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 .employee-metric-icon {
   width: 34px;
@@ -5393,14 +5487,33 @@ textarea {
   }
 }
 
-.whatsapp-day-actions { display:flex; flex-wrap:wrap; gap: .65rem; align-items:center; margin:.75rem 0; }
-.whatsapp-message-day { margin-top: 12px; }
+.whatsapp-day-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.65rem;
+  align-items: center;
+  margin: 0.75rem 0;
+}
+.whatsapp-message-day {
+  margin-top: 12px;
+}
 
-.whatsapp-day-actions input[type="date"] { display:block; max-width:100%; }
-.whatsapp-sync-status { display:flex; gap:.4rem; align-items:center; }
+.whatsapp-day-actions input[type="date"] {
+  display: block;
+  max-width: 100%;
+}
+.whatsapp-sync-status {
+  display: flex;
+  gap: 0.4rem;
+  align-items: center;
+}
 
 /* Day rows share consistent select/date/action columns, even when collapsed. */
-.whatsapp-message-day > details { margin: 0; border-radius: 10px; overflow: hidden; }
+.whatsapp-message-day > details {
+  margin: 0;
+  border-radius: 10px;
+  overflow: hidden;
+}
 .whatsapp-message-day .whatsapp-day-header {
   display: grid;
   grid-template-columns: 20px minmax(0, 1fr) auto;
@@ -5409,29 +5522,263 @@ textarea {
   padding: 18px 20px;
   list-style: none;
 }
-.whatsapp-day-header::-webkit-details-marker { display: none; }
-.whatsapp-day-select { width: 18px; height: 18px; margin: 0; cursor: pointer; }
-.whatsapp-day-title { display: grid; gap: 6px; min-width: 0; }
-.whatsapp-day-date { display: flex; align-items: baseline; gap: 8px; color: var(--text); font-weight: 600; line-height: 1.5; }
-.whatsapp-day-title small { padding-left: 18px; color: var(--muted); font-size: 12px; }
-.whatsapp-day-chevron { flex: none; width: 10px; }
-.whatsapp-day-buttons { display: flex; gap: 8px; }
-.whatsapp-day-buttons .button { margin: 0; min-height: 36px; padding: 8px 12px; }
-.whatsapp-day-content { padding: 0 20px 20px; }
-.whatsapp-day-content > p { padding: 8px 0; margin: 0 0 12px; line-height: 1.6; }
-.whatsapp-day-content .table-scroll { border-radius: 6px; }
-.whatsapp-day-content th, .whatsapp-day-content td { padding: 14px 16px; }
-.whatsapp-day-content > .button { margin-top: 16px; }
+.whatsapp-day-header::-webkit-details-marker {
+  display: none;
+}
+.whatsapp-day-select {
+  width: 18px;
+  height: 18px;
+  margin: 0;
+  cursor: pointer;
+}
+.whatsapp-day-title {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+}
+.whatsapp-day-date {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  color: var(--text);
+  font-weight: 600;
+  line-height: 1.5;
+}
+.whatsapp-day-title small {
+  padding-left: 18px;
+  color: var(--muted);
+  font-size: 12px;
+}
+.whatsapp-day-chevron {
+  flex: none;
+  width: 10px;
+}
+.whatsapp-day-buttons {
+  display: flex;
+  gap: 8px;
+}
+.whatsapp-day-buttons .button {
+  margin: 0;
+  min-height: 36px;
+  padding: 8px 12px;
+}
+.whatsapp-day-content {
+  padding: 0 20px 20px;
+}
+.whatsapp-day-content > p {
+  padding: 8px 0;
+  margin: 0 0 12px;
+  line-height: 1.6;
+}
+.whatsapp-day-content .table-scroll {
+  border-radius: 6px;
+}
+.whatsapp-day-content th,
+.whatsapp-day-content td {
+  padding: 14px 16px;
+}
+.whatsapp-day-content > .button {
+  margin-top: 16px;
+}
 @media (max-width: 600px) {
-  .whatsapp-message-day .whatsapp-day-header { gap: 10px; padding: 16px 12px; }
-  .whatsapp-day-buttons { flex-direction: column; gap: 6px; }
-  .whatsapp-day-buttons .button { padding: 7px 10px; }
-  .whatsapp-day-content { padding: 0 12px 16px; }
-  .whatsapp-day-date { font-size: 13px; }
+  .whatsapp-message-day .whatsapp-day-header {
+    gap: 10px;
+    padding: 16px 12px;
+  }
+  .whatsapp-day-buttons {
+    flex-direction: column;
+    gap: 6px;
+  }
+  .whatsapp-day-buttons .button {
+    padding: 7px 10px;
+  }
+  .whatsapp-day-content {
+    padding: 0 12px 16px;
+  }
+  .whatsapp-day-date {
+    font-size: 13px;
+  }
 }
 
-.navbar-whatsapp-status { display: inline-flex; align-items: center; gap: 7px; padding: 6px 10px; margin-left: auto; font-size: 12px; line-height: 1.5; white-space: nowrap; }
+.navbar-whatsapp-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 6px 10px;
+  margin-left: auto;
+  font-size: 12px;
+  line-height: 1.5;
+  white-space: nowrap;
+}
 @media (max-width: 950px) {
-  .topbar { flex-wrap: wrap; }
-  .navbar-whatsapp-status { order: 3; flex-basis: 100%; margin: 0; padding: 2px 0 0; }
+  .topbar {
+    flex-wrap: wrap;
+  }
+  .navbar-whatsapp-status {
+    order: 3;
+    flex-basis: 100%;
+    margin: 0;
+    padding: 2px 0 0;
+  }
+}
+
+/* Monthly average visibility is independent on screen and paper. */
+@media screen {
+  .average-screen-hidden {
+    display: none !important;
+  }
+}
+@media print {
+  .average-print-hidden {
+    display: none !important;
+  }
+}
+.account-profile {
+  display: flex;
+  flex-direction: column;
+  text-align: left;
+  min-width: 0;
+}
+.account-profile strong {
+  max-width: 160px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.account-profile small {
+  font-size: 11px;
+  opacity: 0.75;
+}
+.bulk-employees small.badge {
+  display: table;
+  margin-top: 4px;
+}
+
+/* Monthly employee report delivery */
+.send-employee-report {
+  padding: 24px;
+}
+.report-send-controls {
+  border: 0;
+  padding: 0;
+  margin: 18px 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px;
+  align-items: end;
+}
+.report-send-controls label {
+  display: grid;
+  gap: 8px;
+  min-width: 180px;
+}
+.send-employee-report .table-scroll {
+  margin-top: 20px;
+}
+.send-employee-report th,
+.send-employee-report td {
+  padding: 14px 18px;
+}
+.send-employee-report td small {
+  display: block;
+  margin-top: 6px;
+}
+.report-send-footer {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px;
+  align-items: center;
+  justify-content: space-between;
+  margin-top: 20px;
+}
+.report-sent {
+  color: #16804a;
+}
+@media (max-width: 600px) {
+  .send-employee-report {
+    padding: 16px;
+  }
+  .report-send-controls label {
+    min-width: 0;
+    width: 100%;
+  }
+}
+
+.calendar-employee-filter {
+  min-width: 140px;
+  max-width: 240px;
+  min-height: 40px;
+  padding: 10px 14px;
+  flex: 1 1 140px;
+}
+
+.calendar-individual-status {
+  color: var(--cal-fg);
+  background: var(--cal-bg);
+  border-radius: 4px;
+  padding: 2px 4px;
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+.calendar-individual-times {
+  display: grid;
+  gap: 2px;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere;
+}
+@media (max-width: 600px) {
+  .calendar-individual-status,
+  .calendar-individual-times {
+    font-size: 10px;
+  }
+}
+
+.month-table .month-status-total {
+  padding: 12px 10px;
+  font-variant-numeric: tabular-nums;
+  border-left: 1px solid var(--border);
+  font-weight: 700;
+}
+.month-table th.month-status-total {
+  font-size: 16px;
+}
+
+/* Monthly totals are more defined than the daily attendance markings. */
+.month-table .month-status-total.present {
+  background: #dceee2;
+}
+.month-table .month-status-total.absent {
+  background: #f6dfdc;
+}
+.month-table .month-status-total.half-day {
+  background: #f4e8c7;
+}
+[data-theme="dark"] .month-table .month-status-total.present {
+  background: #2b4835;
+}
+[data-theme="dark"] .month-table .month-status-total.absent {
+  background: #513330;
+}
+[data-theme="dark"] .month-table .month-status-total.half-day {
+  background: #504328;
+}
+.month-table th.month-status-total {
+  box-shadow: inset 0 3px 0 currentColor;
+}
+.month-table .month-status-total.present {
+  border-left: 2px solid var(--border);
+}
+
+.whatsapp-entry-editor > .form-grid,
+.whatsapp-entry-editor > label,
+.whatsapp-entry-editor > p {
+  margin: 18px 24px;
+}
+.whatsapp-entry-editor .form-grid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+@media (max-width: 600px) {
+  .whatsapp-entry-editor .form-grid {
+    grid-template-columns: 1fr;
+  }
 }

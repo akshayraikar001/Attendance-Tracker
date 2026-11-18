@@ -125,11 +125,7 @@ export default function AuthGate({ children }) {
       <form className="card login-card" onSubmit={submit}>
         <div className="login-brand">dayline.</div>
         <h1>{registering ? "Create your account" : "Welcome back"}</h1>
-        <p>
-          {registering
-            ? "Enter your details to get started."
-            : "Sign in to your attendance workspace."}
-        </p>
+
         {(mode === "login" || registering) && (
           <>
             {registering && (

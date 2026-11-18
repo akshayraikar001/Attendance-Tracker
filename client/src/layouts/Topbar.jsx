@@ -7,6 +7,9 @@ import {
   ChevronDown,
   LogOut,
   Menu,
+  UserRound,
+  Settings,
+  Users,
 } from "lucide-react";
 
 export default function Topbar({
@@ -101,15 +104,33 @@ export default function Topbar({
         <span className="divider" />
         <details className="account-menu">
           <summary>
-            Account <ChevronDown size={16} aria-hidden="true" />
+            <span className="avatar admin" aria-hidden="true">
+              {user.name
+                .trim()
+                .split(/\s+/)
+                .map((part) => part[0])
+                .slice(0, 2)
+                .join("")
+                .toUpperCase()}
+            </span>
+            <span className="account-profile">
+              <strong>{user.name}</strong>
+              <small>{user.role}</small>
+            </span>
+            <ChevronDown size={16} aria-hidden="true" />
           </summary>
           <div className="account-menu-panel">
             <strong>{user.name}</strong>
             <small>{user.role}</small>
             {[
-              "My account",
-              ...(user.role === "Admin" ? ["Settings", "User management"] : []),
-            ].map((destination) => (
+              ["My account", UserRound],
+              ...(user.role === "Admin"
+                ? [
+                    ["Settings", Settings],
+                    ["User management", Users],
+                  ]
+                : []),
+            ].map(([destination, Icon]) => (
               <button
                 type="button"
                 key={destination}
@@ -120,6 +141,7 @@ export default function Topbar({
                   navigate(destination);
                 }}
               >
+                <Icon size={17} aria-hidden="true" />
                 {destination}
               </button>
             ))}

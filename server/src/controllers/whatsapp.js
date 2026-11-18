@@ -1,4 +1,4 @@
-import { localMessageTime } from "../utils/whatsapp-parser.js";
+import { dayBounds, localMessageTime } from "../utils/whatsapp-parser.js";
 import { z } from "zod";
 import { saveEmployeePhone } from "../services/employee-phone.js";
 import { chateryRequest, ensureChatery } from "../integrations/chatery.js";
@@ -24,23 +24,6 @@ const selectionSchema = z.object({
   dates: z.array(dateSchema).min(1).max(366).optional(),
   all: z.boolean().optional(),
 });
-function dayBounds(date, zone) {
-  const midnight = Date.parse(date + "T00:00:00Z") / 1000;
-  const boundary = (target) => {
-    let low = midnight - 36 * 3600,
-      high = midnight + 60 * 3600;
-    while (low < high) {
-      const mid = Math.floor((low + high) / 2);
-      if (localMessageTime(mid, zone).date < target) low = mid + 1;
-      else high = mid;
-    }
-    return low;
-  };
-  return [
-    boundary(date),
-    boundary(new Date((midnight + 86400) * 1000).toISOString().slice(0, 10)),
-  ];
-}
 function dayFilter(dates, zone) {
   if (!dates?.length) return { sql: "", args: [] };
   return {
@@ -164,6 +147,60 @@ export function registerWhatsApp({ app, wrap, query, transaction, audit }) {
       res.json({ events: rows.slice(0, 100), hasMore: rows.length > 100 });
     }),
   );
+  app.get(
+    "/api/whatsapp/group-messages",
+    wrap(async (req, res) => {
+      const input = z
+        .object({
+          date: dateSchema.optional(),
+          offset: z.coerce.number().int().min(0).max(1000000).default(0),
+          history: z
+            .enum(["archived"])
+            .optional()
+            .transform((v) => v === "archived"),
+        })
+        .parse(req.query);
+      res.json(await service.groupMessages(input));
+    }),
+  );
+  app.post(
+    "/api/whatsapp/group-messages/scan",
+    wrap(async (req, res) => {
+      const input = z
+        .object({
+          date: dateSchema.optional(),
+          start: z.boolean().optional(),
+        })
+        .parse(req.body);
+      res.json(await service.scanGroupMessages(input));
+    }),
+  );
+  app.delete(
+    "/api/whatsapp/group-messages",
+    wrap(async (req, res) => {
+      const input = z
+        .object({
+          date: dateSchema.optional(),
+          sessionId: z.string().min(1).max(80),
+          groupId: z.string().min(1).max(160),
+        })
+        .parse(req.body);
+      res.json(await service.clearGroupMessages(input));
+    }),
+  );
+  app.post(
+    "/api/whatsapp/group-messages/select",
+    wrap(async (req, res) => {
+      const input = z
+        .object({
+          messageId: z.string().min(1).max(160),
+          sessionId: z.string().min(1).max(200),
+          groupId: z.string().min(1).max(200),
+        })
+        .parse(req.body);
+      res.json(await service.selectGroupMessage(input));
+    }),
+  );
   app.post(
     "/api/whatsapp/connect",
     wrap(async (req, res) => {
@@ -213,6 +250,11 @@ export function registerWhatsApp({ app, wrap, query, transaction, audit }) {
     "/api/whatsapp/events",
     wrap(async (req, res) => {
       const selection = selectionSchema.parse(req.body || {});
+      if (service.status.syncing)
+        throw fail(
+          "The previous request is finishing. Try Sync again in a few seconds.",
+          409,
+        );
       await transaction(async (c) => {
         const [rows] = await c.execute(
           "SELECT config FROM whatsapp_config WHERE id=1 FOR UPDATE",
@@ -351,19 +393,48 @@ export function registerWhatsApp({ app, wrap, query, transaction, audit }) {
   app.post(
     "/api/whatsapp/approve",
     wrap(async (req, res) => {
-      const { id, overwrite = true } = z
+      const {
+        id,
+        overwrite = true,
+        correction,
+        expectedText,
+      } = z
         .object({
           id: z.string().regex(/^[a-f0-9]{64}$/),
           overwrite: z.boolean().optional(),
+          expectedText: z.string().max(2000).optional(),
+          correction: z
+            .object({
+              expectedText: z.string().max(2000),
+              employeeId: z.number().int().positive(),
+              date: dateSchema,
+              action: z.enum(["in", "out"]),
+              time: z.string().regex(/^(?:[01]\d|2[0-3]):[0-5]\d$/),
+            })
+            .optional(),
         })
         .parse(req.body);
-      res.json(await service.retryEvent(id, overwrite));
+      res.json(
+        await service.retryEvent(id, overwrite, correction, expectedText),
+      );
+    }),
+  );
+  app.post(
+    "/api/whatsapp/sync/clear",
+    wrap(async (_req, res) => {
+      await service.clearStuckSync();
+      res.json({ ok: true });
     }),
   );
   app.post(
     "/api/whatsapp/sync",
     wrap(async (req, res) => {
       const selection = selectionSchema.parse(req.body || {});
+      if (service.status.syncing)
+        throw fail(
+          "The previous request is finishing. Try Sync again in a few seconds.",
+          409,
+        );
       if (selection.all || selection.dates) {
         await transaction(async (c) => {
           await c.execute("SELECT id FROM settings WHERE id=1 FOR UPDATE");
@@ -388,6 +459,7 @@ export function registerWhatsApp({ app, wrap, query, transaction, audit }) {
             scanned: 0,
             startedAt: Math.floor(Date.now() / 1000),
             fullScan: !dates,
+            recoverHistory: !cfg.resumeFromCache,
             dates,
             cutoff: dates
               ? Math.max(cfg.since || 0, dayBounds(dates[0], cfg.timeZone)[0])

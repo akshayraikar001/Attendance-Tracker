@@ -1,6 +1,5 @@
 import { calculate, resolveRules } from "./rules.js";
 import { localMessageTime } from "../utils/whatsapp-parser.js";
-import { formatTime } from "../../../shared/time.js";
 import { createHash } from "node:crypto";
 const parse = (value) =>
   typeof value === "string" ? JSON.parse(value) : value;
@@ -65,7 +64,7 @@ export function createAutoClockOut({ transaction, audit, now = Date.now }) {
             { ...row, outTime, overnight: false },
             rules,
           );
-          const note = `Auto Out time: ${formatTime(outTime)} — no Out time received by ${formatTime(cutoff)}.`;
+          const note = "!! Auto Out time Added";
           const notes = [row.notes, note].filter(Boolean).join("\n");
           await c.execute(
             `UPDATE attendance SET outTime=?,status=?,workedMinutes=?,lateMinutes=?,earlyMinutes=?,overtimeMinutes=?,notes=?,rules=? WHERE id=?`,

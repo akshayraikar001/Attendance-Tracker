@@ -1,3 +1,8 @@
+import {
+  connectTestAdmin,
+  testDatabaseHost,
+  testDatabasePort,
+} from "../helpers/database.mjs";
 import assert from "node:assert/strict";
 import mysql from "mysql2/promise";
 import { spawnSync } from "node:child_process";
@@ -6,10 +11,7 @@ import {
   createWhatsAppService,
 } from "../../server/src/services/whatsapp.js";
 import { registerWhatsApp } from "../../server/src/controllers/whatsapp.js";
-const admin = await mysql.createConnection({
-  socketPath: process.cwd() + "/.local/mysql.sock",
-  user: "root",
-});
+const admin = await connectTestAdmin();
 const database = "attendance_leave_test_" + Date.now();
 let pool;
 try {
@@ -21,8 +23,8 @@ try {
     encoding: "utf8",
     env: {
       ...process.env,
-      DB_HOST: "127.0.0.1",
-      DB_PORT: "3307",
+      DB_HOST: testDatabaseHost,
+      DB_PORT: String(testDatabasePort),
       DB_NAME: database,
       DB_USER: "attendance",
       DB_PASSWORD: "attendance_dev",
@@ -30,8 +32,8 @@ try {
   });
   assert.equal(setup.status, 0, setup.stderr);
   pool = mysql.createPool({
-    host: "127.0.0.1",
-    port: 3307,
+    host: testDatabaseHost,
+    port: testDatabasePort,
     user: "attendance",
     password: "attendance_dev",
     database,
@@ -474,6 +476,70 @@ try {
     if (previousPath === undefined) delete process.env.CHATERY_MANAGED_PATH;
     else process.env.CHATERY_MANAGED_PATH = previousPath;
     await new Promise((resolve) => bridge.close(resolve));
+  }
+  // Manual review is retained, deduplicated, and never touches attendance.
+  const manual = requests.find((r) => r.messageId === "leave-unknown");
+  const attendanceBeforeReview = await query(
+    "SELECT * FROM attendance ORDER BY id",
+  );
+  await call("POST", "/api/leave/:id/reviewed", {}, manual.id);
+  assert.deepEqual(
+    await query("SELECT * FROM attendance ORDER BY id"),
+    attendanceBeforeReview,
+  );
+  const reviewed = await query("SELECT * FROM leave_requests WHERE id=?", [
+    manual.id,
+  ]);
+  assert.equal(reviewed[0].state, "reviewed");
+  assert.ok(reviewed[0].decidedAt);
+  assert.ok(
+    !(await call("GET", "/api/leave")).requests.some((r) => r.id === manual.id),
+  );
+  await assert.rejects(() =>
+    call("POST", "/api/leave/:id/reviewed", {}, manual.id),
+  );
+  await assert.rejects(() =>
+    call(
+      "POST",
+      "/api/leave/:id/approve",
+      {
+        employeeId: 1,
+        kind: "Absent",
+        from: "2026-10-01",
+        to: "2026-10-01",
+      },
+      manual.id,
+    ),
+  );
+  const reviewedList = await call("GET", "/api/leave", {}, null, {
+    state: "reviewed",
+  });
+  assert.ok(reviewedList.requests.some((r) => r.id === manual.id));
+  await sync.poll();
+  assert.equal(
+    (await query("SELECT state FROM leave_requests WHERE id=?", [manual.id]))[0]
+      .state,
+    "reviewed",
+  );
+  await call("POST", "/api/leave/:id/pending", {}, manual.id);
+  const [restored] = await query("SELECT * FROM leave_requests WHERE id=?", [
+    manual.id,
+  ]);
+  assert.equal(restored.state, "pending");
+  assert.equal(restored.decidedBy, null);
+  assert.equal(restored.decidedAt, null);
+  assert.ok(
+    (await call("GET", "/api/leave")).requests.some((r) => r.id === manual.id),
+  );
+  assert.deepEqual(
+    await query("SELECT * FROM attendance ORDER BY id"),
+    attendanceBeforeReview,
+  );
+  for (const id of [manual.id, range.id, unclear.id]) {
+    await assert.rejects(
+      () => call("POST", "/api/leave/:id/pending", {}, id),
+      (e) => e.status === 409,
+    );
   }
   await call("PUT", "/api/leave/config", { enabled: false });
   const count = (await query("SELECT * FROM leave_requests")).length;

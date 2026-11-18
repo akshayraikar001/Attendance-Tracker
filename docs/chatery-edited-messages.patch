@@ -1,0 +1,37 @@
+--- a/src/services/whatsapp/MessageFormatter.js
++++ b/src/services/whatsapp/MessageFormatter.js
+@@ -42,7 +42,8 @@
+             }
+         }
+ 
+-        const messageContent = msg.message;
++        const isEdited = Boolean(msg.message?.editedMessage);
++        const messageContent = msg.message?.editedMessage?.message || msg.message;
+         let type = 'unknown';
+         let content = null;
+         let caption = null;
+@@ -134,6 +135,7 @@
+             timestamp: typeof msg.messageTimestamp === 'object' 
+                 ? msg.messageTimestamp.low 
+                 : msg.messageTimestamp,
++            isEdited,
+             type: type,
+             content: content,
+             caption: caption,
+--- a/src/services/whatsapp/BaileysStore.js
++++ b/src/services/whatsapp/BaileysStore.js
+@@ -312,7 +312,13 @@
+         if (chatMessages) {
+           const existing = chatMessages.get(key.id);
+           if (existing) {
+-            chatMessages.set(key.id, { ...existing, ...update });
++            const next = { ...existing, ...update };
++            // Edits retain the original attendance day; keep edit time separately.
++            if (update.message?.editedMessage) {
++              next.messageTimestamp = existing.messageTimestamp;
++              next.editedTimestamp = update.messageTimestamp;
++            }
++            chatMessages.set(key.id, next);
+           }
+         }
+       }

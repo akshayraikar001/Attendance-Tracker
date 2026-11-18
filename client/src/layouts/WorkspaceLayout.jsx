@@ -1,3 +1,5 @@
+import { holidayAdjustedRecords } from "../../../shared/calendar.js";
+import SendEmployeeReport from "../pages/reports/SendEmployeeReport.jsx";
 import LocationTracking from "../pages/locations/LocationTracking.jsx";
 import TimeAway from "../pages/attendance/TimeAway.jsx";
 import useTheme from "../hooks/useTheme.js";
@@ -7,7 +9,6 @@ import Topbar from "./Topbar.jsx";
 import Sidebar from "./Sidebar.jsx";
 import api from "../services/api.js";
 import WorkedTime from "../components/common/WorkedTime.jsx";
-import ActivityLog from "../pages/reports/ActivityLog.jsx";
 import LeaveApproval from "../pages/leave/LeaveApproval.jsx";
 import { savedPage } from "../utils/navigation.js";
 import WhatsAppSettings from "../pages/whatsapp/WhatsAppSettings.jsx";
@@ -67,12 +68,11 @@ export default function WorkspaceLayout({
   const [theme, setTheme] = useTheme();
   const [page, setPage] = useState(() => savedPage(localStorage, user.role)),
     [employees, setEmployees] = useState([]),
-    [records, setRecords] = useState([]),
+    [savedRecords, setRecords] = useState([]),
     [holidays, setHolidays] = useState([]),
     [catalog, setCatalog] = useState({ departments: [], roles: [] }),
     [bulkOpen, setBulkOpen] = useState(false),
     [rules, setRules] = useState(defaultRules),
-    [audit, setAudit] = useState([]),
     [date, setDate] = useState(initialDate),
     [search, setSearch] = useState(""),
     [department, setDepartment] = useState("All departments"),
@@ -85,6 +85,7 @@ export default function WorkspaceLayout({
     [from, setFrom] = useState(initialDate.slice(0, 7) + "-01"),
     [to, setTo] = useState(initialDate),
     [reportTab, setReportTab] = useState("Daily report");
+  const [calendarEmployee, setCalendarEmployee] = useState("");
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const reportTabLabel = (tab) => {
@@ -105,11 +106,10 @@ export default function WorkspaceLayout({
   }, [page]);
   async function load() {
     try {
-      const [e, a, r, h, holidays, catalog] = await Promise.all([
+      const [e, a, r, holidays, catalog] = await Promise.all([
         api("/employees"),
         api("/attendance"),
         api("/settings"),
-        api("/audit"),
         api("/holidays"),
         api("/catalog"),
       ]);
@@ -118,7 +118,6 @@ export default function WorkspaceLayout({
       setEmployees(e);
       setRecords(a);
       setRules(r);
-      setAudit(h);
       setError("");
     } catch (e) {
       setError(e.message);
@@ -142,6 +141,11 @@ export default function WorkspaceLayout({
     setFilter("All statuses");
     setDepartment("All departments");
   };
+  const records = holidayAdjustedRecords(
+    savedRecords,
+    holidays,
+    rules.weeklyOffDays ?? [0],
+  );
   const active = employees.filter((e) => e.status === "Active");
   const daily = records.filter((r) => r.date === date);
   const holiday = holidayForDate(date, holidays, rules.weeklyOffDays ?? [0]);
@@ -200,7 +204,9 @@ export default function WorkspaceLayout({
     );
   async function exportExcel(data = report) {
     try {
-      await downloadAttendanceWorkbook(data);
+      await downloadAttendanceWorkbook(data, {
+        employeeReport: reportTab === "Employee summary",
+      });
       setToast("Excel report exported successfully");
     } catch {
       setToast("Could not export Excel. Please try again.");
@@ -227,7 +233,7 @@ export default function WorkspaceLayout({
   function selectAttendance(employeeId, entryDate) {
     const numericEmployeeId = Number(employeeId);
     const employee = employees.find((e) => e.id === numericEmployeeId);
-    const existing = records.find(
+    const existing = savedRecords.find(
       (r) => r.employeeId === numericEmployeeId && r.date === entryDate,
     );
     const timing = {
@@ -265,23 +271,6 @@ export default function WorkspaceLayout({
     const employeeId = Number(row?.employeeId || active[0]?.id || 0);
     selectAttendance(employeeId, row?.date || date || initialDate);
   }
-  const entryEmployee = employees.find(
-    (e) => e.id === Number(modal?.data?.employeeId),
-  );
-  const entryRules = {
-    ...defaultRules,
-    ...(effectiveRules(
-      rules || defaultRules,
-      entryEmployee,
-      modal?.data?.date,
-    ) || {}),
-  };
-  const safeRules = rules || defaultRules;
-  const entryRuleSource = safeRules.employeeRules?.[entryEmployee?.id]
-    ? "Custom employee timings"
-    : safeRules.groupRules?.[entryEmployee?.department]
-      ? entryEmployee.department + " group timings"
-      : "Workspace timings";
   const changeDate = (n) => {
     const d = new Date(date + "T12:00:00");
     d.setDate(d.getDate() + n);
@@ -444,11 +433,6 @@ export default function WorkspaceLayout({
                 ? "Loading your workspace…"
                 : "No attendance records found"}
             </h3>
-            <p>
-              {loading
-                ? "This will only take a moment."
-                : "Add employees and record attendance, or adjust your filters."}
-            </p>
           </div>
         )}
       </div>
@@ -504,23 +488,6 @@ export default function WorkspaceLayout({
                                   ? "WhatsApp attendance"
                                   : "Attendance register"}
                 </h1>
-                <p>
-                  {page === "Time away"
-                    ? "Review departures, returns, and time away for each day."
-                    : page === "Overview"
-                      ? "A clear picture of who's in, who's out, and everything in between."
-                      : page === "Employees"
-                        ? "Good teams start with great people. Keep everyone in one place."
-                        : page === "Reports"
-                          ? "Every hour accounted for. Every detail, ready when you need it."
-                          : page === "Leave Approval"
-                            ? "Review leave requests before updating attendance."
-                            : page === "WhatsApp attendance"
-                              ? "Import attendance messages from one WhatsApp group."
-                              : page === "Settings"
-                                ? "Set the rules that make sense for your team."
-                                : "Keep each workday accurate, one entry at a time."}
-                </p>
               </div>
               <div className="heading-actions">
                 {page === "Employees" ? (
@@ -554,7 +521,7 @@ export default function WorkspaceLayout({
                           "Daily report",
                           "Monthly report",
                           "Employee report",
-                          "Activity log",
+                          "Send Emp Report",
                         ].includes(reportTab) && (
                           <button
                             className="button"
@@ -581,9 +548,30 @@ export default function WorkspaceLayout({
                           </button>
                         </>
                       )}
+                      {page === "Calendar" && (
+                        <select
+                          className="calendar-employee-filter"
+                          aria-label="Calendar employee"
+                          value={calendarEmployee}
+                          onChange={(e) => setCalendarEmployee(e.target.value)}
+                        >
+                          <option value="">All</option>
+                          {employees.map((employee) => (
+                            <option key={employee.id} value={employee.id}>
+                              {employee.name}
+                            </option>
+                          ))}
+                        </select>
+                      )}
                       <button
                         className="primary"
-                        onClick={() => openAttendance()}
+                        onClick={() =>
+                          openAttendance(
+                            page === "Calendar" && calendarEmployee
+                              ? { employeeId: calendarEmployee, date }
+                              : undefined,
+                          )
+                        }
                       >
                         <Plus size={17} /> Record attendance
                       </button>
@@ -606,8 +594,19 @@ export default function WorkspaceLayout({
             )}
             {page === "Calendar" && (
               <AttendanceCalendar
-                employees={employees}
-                records={records}
+                individual={Boolean(calendarEmployee)}
+                employees={
+                  calendarEmployee
+                    ? employees.filter((e) => String(e.id) === calendarEmployee)
+                    : employees
+                }
+                records={
+                  calendarEmployee
+                    ? records.filter(
+                        (r) => String(r.employeeId) === calendarEmployee,
+                      )
+                    : records
+                }
                 holidays={holidays}
                 weeklyOffDays={rules.weeklyOffDays ?? [0]}
                 date={date}
@@ -617,16 +616,12 @@ export default function WorkspaceLayout({
                 onHolidaySave={async (holidayDate, data) => {
                   await api("/holidays/" + holidayDate, data, "PUT");
                   setHolidays(await api("/holidays"));
-                  setAudit(await api("/audit"));
                   setToast(data.active ? "Holiday saved" : "Holiday removed");
                 }}
               />
             )}
             {holiday && (page === "Overview" || page === "Attendance") && (
-              <p className="holiday-banner">
-                Holiday · {holiday.name}. Existing attendance is preserved;
-                employees without entries are on holiday.
-              </p>
+              <p className="holiday-banner">Holiday · {holiday.name}</p>
             )}
             {(page === "Overview" || page === "Attendance") && (
               <>
@@ -673,7 +668,6 @@ export default function WorkspaceLayout({
                         icon: Users,
                         color: "gray",
                         sub: "Across " + departments.length + " departments",
-                        foot: "Your team, all in one place",
                       },
                       {
                         title: "Present today",
@@ -684,7 +678,6 @@ export default function WorkspaceLayout({
                           (active.length
                             ? Math.round((present / active.length) * 100)
                             : 0) + "% of your team",
-                        foot: "Showing up. Making things happen.",
                       },
                       {
                         title: "Absent today",
@@ -692,15 +685,13 @@ export default function WorkspaceLayout({
                         icon: CalendarDays,
                         color: "red",
                         sub: unmarked + " not yet marked",
-                        foot: "A little visibility goes a long way",
                       },
                       {
                         title: "Late arrivals",
                         value: late,
                         icon: Clock,
                         color: "orange",
-                        sub: rules.graceMinutes + " min grace period applied",
-                        foot:
+                        sub:
                           half +
                           " half-day" +
                           (half === 1 ? "" : "s") +
@@ -718,7 +709,6 @@ export default function WorkspaceLayout({
                           {s.value}
                           <span className={"stat-sub " + s.color}>{s.sub}</span>
                         </div>
-                        <div className="stat-foot">{s.foot}</div>
                       </div>
                     ))}
                   </div>
@@ -732,7 +722,6 @@ export default function WorkspaceLayout({
                             Attendance trends{" "}
                             <span className="tiny-tag">Last 7 days</span>
                           </h2>
-                          <p>A little perspective on your team's week.</p>
                         </div>
                         <div className="chart-legend">
                           <span>
@@ -848,7 +837,6 @@ export default function WorkspaceLayout({
                       <div className="card-heading">
                         <div>
                           <h2>The shape of your day</h2>
-                          <p>Today's attendance breakdown</p>
                         </div>
                         <span className="sun-icon">
                           <Sun size={20} />
@@ -887,7 +875,11 @@ export default function WorkspaceLayout({
                             holiday
                               ? active.filter(
                                   (e) =>
-                                    !daily.some((r) => r.employeeId === e.id),
+                                    !daily.some(
+                                      (r) =>
+                                        r.employeeId === e.id &&
+                                        r.status !== "Holiday",
+                                    ),
                                 ).length
                               : unmarked,
                             "legend-gray",
@@ -925,10 +917,6 @@ export default function WorkspaceLayout({
                             {date === initialDate ? "Today" : shortDate(date)}
                           </span>
                         </h2>
-                        <p>
-                          Your team’s check-ins, hours, and everything in
-                          between.
-                        </p>
                       </div>
                       <span className="record-count">
                         {daily.length} of {active.length} recorded
@@ -962,10 +950,6 @@ export default function WorkspaceLayout({
                     {attendanceTable(rows)}
                     <div className="table-footer">
                       <span>Showing {rows.length} employees</span>
-                      <span>
-                        <span className="live-dot" /> All times in your team's
-                        local time
-                      </span>
                     </div>
                   </section>
                 )}
@@ -993,7 +977,6 @@ export default function WorkspaceLayout({
                         {employees.length} people
                       </span>
                     </h2>
-                    <p>Manage profiles, departments, and employee status.</p>
                   </div>
                 </div>
                 <div className="table-toolbar">
@@ -1034,9 +1017,6 @@ export default function WorkspaceLayout({
                   <div className="empty">
                     <Users />
                     <h3>No employees yet</h3>
-                    <p>
-                      Add your first team member to start tracking attendance.
-                    </p>
                   </div>
                 )}
               </section>
@@ -1049,7 +1029,7 @@ export default function WorkspaceLayout({
                   "Employee report",
                   "Attendance details",
                   "Employee summary",
-                  "Activity log",
+                  ...(user.role === "Admin" ? ["Send Emp Report"] : []),
                 ].map((tab) => (
                   <button
                     key={tab}
@@ -1071,6 +1051,9 @@ export default function WorkspaceLayout({
                 weeklyOffDays={rules.weeklyOffDays ?? [0]}
               />
             )}
+            {page === "Reports" &&
+              reportTab === "Send Emp Report" &&
+              user.role === "Admin" && <SendEmployeeReport />}
             {page === "Reports" && reportTab === "Employee report" && (
               <EmployeeReport
                 employees={employees}
@@ -1086,14 +1069,7 @@ export default function WorkspaceLayout({
                 holidays={holidays}
                 rules={rules}
                 onEdit={openAttendance}
-              />
-            )}
-            {page === "Reports" && reportTab === "Activity log" && (
-              <ActivityLog
-                events={audit}
-                employees={employees}
-                timeFormat={rules.timeFormat}
-                onRefresh={load}
+                onBulkAttendance={() => setBulkOpen("attendance")}
               />
             )}
             {page === "Reports" &&
@@ -1101,7 +1077,7 @@ export default function WorkspaceLayout({
                 "Daily report",
                 "Monthly report",
                 "Employee report",
-                "Activity log",
+                "Send Emp Report",
               ].includes(reportTab) && (
                 <>
                   <div className="report-controls">
@@ -1163,16 +1139,22 @@ export default function WorkspaceLayout({
                           " / " +
                           report.filter((r) => r.earlyMinutes > 0).length,
                       ],
-                    ].map(([n, v]) => (
-                      <div className="stat-card" key={n}>
-                        <div className="stat-top">{n}</div>
-                        <div className="stat-value">{v}</div>
-                        <small>Selected reporting period</small>
-                      </div>
-                    ))}
+                    ]
+                      .filter(
+                        ([n]) =>
+                          reportTab !== "Employee summary" ||
+                          n !== "Late / early events",
+                      )
+                      .map(([n, v]) => (
+                        <div className="stat-card" key={n}>
+                          <div className="stat-top">{n}</div>
+                          <div className="stat-value">{v}</div>
+                          <small>Selected reporting period</small>
+                        </div>
+                      ))}
                   </div>
                   <section className="card">
-                    {reportTab !== "Activity log" && (
+                    {
                       <div className="table-toolbar">
                         {searchBox}
                         <select
@@ -1193,7 +1175,7 @@ export default function WorkspaceLayout({
                           ))}
                         </select>
                       </div>
-                    )}
+                    }
                     {reportTab === "Attendance details" ? (
                       attendanceTable(report, true)
                     ) : reportTab === "Employee summary" ? (
@@ -1211,8 +1193,6 @@ export default function WorkspaceLayout({
                                 "In progress",
                                 "Worked",
                                 "Overtime",
-                                "Late",
-                                "Early",
                               ].map((x) => (
                                 <th key={x}>{x}</th>
                               ))}
@@ -1238,18 +1218,18 @@ export default function WorkspaceLayout({
                                       {rs.filter((r) => r.status === s).length}
                                     </td>
                                   ))}
-                                  {[
-                                    "workedMinutes",
-                                    "overtimeMinutes",
-                                    "lateMinutes",
-                                    "earlyMinutes",
-                                  ].map((s) => (
-                                    <td key={s}>
-                                      {fmt(
-                                        rs.reduce((a, r) => a + (r[s] || 0), 0),
-                                      )}
-                                    </td>
-                                  ))}
+                                  {["workedMinutes", "overtimeMinutes"].map(
+                                    (s) => (
+                                      <td key={s}>
+                                        {fmt(
+                                          rs.reduce(
+                                            (a, r) => a + (r[s] || 0),
+                                            0,
+                                          ),
+                                        )}
+                                      </td>
+                                    ),
+                                  )}
                                 </tr>
                               );
                             })}
@@ -1257,10 +1237,6 @@ export default function WorkspaceLayout({
                         </table>
                       </div>
                     ) : null}
-                    <div className="table-footer">
-                      Manual status entries have no measured hours. Unmarked
-                      days are not counted as absences.
-                    </div>
                   </section>
                 </>
               )}
@@ -1294,12 +1270,6 @@ export default function WorkspaceLayout({
                 }
               />
             )}
-            <footer className="page-footer">
-              <span>Made for your people. Built for your everyday.</span>
-              <span>
-                dayline <span className="footer-dot">✳</span>
-              </span>
-            </footer>
           </main>
         </div>
         {toast && (
@@ -1317,6 +1287,9 @@ export default function WorkspaceLayout({
         {bulkOpen && (
           <BulkAttendance
             reset={bulkOpen === "reset"}
+            records={records}
+            holidays={holidays}
+            rules={rules}
             employees={employees}
             date={date}
             api={api}
@@ -1507,9 +1480,6 @@ export default function WorkspaceLayout({
                           <option>Inactive</option>
                         </select>
                       </label>
-                      <p className="muted">
-                        Inactive employees retain their attendance history.
-                      </p>
                     </div>
                   ) : (
                     <>
@@ -1681,36 +1651,9 @@ export default function WorkspaceLayout({
                             />
                             Out time is the following day
                           </label>
-                          <div className="entry-hint">
-                            <Clock size={17} />
-                            <span>
-                              Leave clock out blank to save an in-progress
-                              shift. Add it later to calculate hours and the
-                              final status.
-                              <br />
-                              {entryRuleSource}:{" "}
-                              {formatTime(
-                                entryRules.shiftStart,
-                                rules.timeFormat,
-                              )}
-                              –
-                              {formatTime(
-                                entryRules.shiftEnd,
-                                rules.timeFormat,
-                              )}
-                              <br />
-                              Full day: {entryRules.fullDayHours}h · Half day:{" "}
-                              {entryRules.halfDayHours}h<br />
-                              Breaks are included. No time is deducted.
-                            </span>
-                          </div>
                         </>
                       ) : (
                         <>
-                          <p className="muted">
-                            Changing status keeps saved times. Clear a time only
-                            if you want to remove it.
-                          </p>
                           <div className="form-grid">
                             {[
                               ["inTime", "In time"],
@@ -1774,7 +1717,7 @@ export default function WorkspaceLayout({
                         Notes <span>optional</span>
                         <textarea
                           maxLength={2000}
-                          placeholder="Add a little context…"
+                          placeholder="Notes"
                           value={modal.data.notes}
                           onChange={(e) =>
                             setModal({
@@ -1784,10 +1727,6 @@ export default function WorkspaceLayout({
                           }
                         />
                       </label>
-                      <p className="muted small-text">
-                        Saving an existing employee/date updates that entry and
-                        records the change in the activity log.
-                      </p>
                     </>
                   )}
                 </fieldset>

@@ -6,10 +6,7 @@ import {
   ChartNoAxesCombined,
   MessageCircle,
   CheckCheck,
-  Settings,
-  LogOut,
   X,
-  UserRound,
 } from "lucide-react";
 
 export default function Sidebar({
@@ -21,8 +18,6 @@ export default function Sidebar({
   page,
   navigate,
   employees,
-  onLogout,
-  setToast,
 }) {
   const sidebar = useRef(null);
   useEffect(() => {
@@ -137,46 +132,6 @@ export default function Sidebar({
             </button>
           ))}
         </nav>
-        <div className="sidebar-bottom">
-          {user.role === "Admin" && (
-            <button
-              className={
-                "settings-nav " + (page === "Settings" ? "active" : "")
-              }
-              onClick={() => navigate("Settings")}
-            >
-              <Settings size={19} /> Settings
-            </button>
-          )}
-          {user.role === "Admin" && (
-            <button
-              className="settings-nav"
-              onClick={() => navigate("User management")}
-            >
-              <Users size={19} /> User management
-            </button>
-          )}
-          <button
-            className="settings-nav"
-            onClick={() => navigate("My account")}
-          >
-            <UserRound size={19} /> My account
-          </button>
-          <button
-            className="settings-nav"
-            onClick={() => onLogout().catch((e) => setToast(e.message))}
-          >
-            <LogOut size={19} /> Sign out
-          </button>
-          <div className="profile">
-            <span className="avatar admin">AD</span>
-            <div>
-              <strong>{user.name}</strong>
-              <small>{user.role}</small>
-            </div>
-            <span className="online-dot" />
-          </div>
-        </div>
       </aside>
     </>
   );

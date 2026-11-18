@@ -1,3 +1,4 @@
+import { registerEmployeeReports } from "./controllers/employee-reports.js";
 import express from "express";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -20,6 +21,7 @@ registerAuth({ app, wrap, transaction, audit, query });
 registerEmployeeAccess({ app, wrap, transaction, audit, query });
 registerLocations({ app, wrap, transaction, audit, query });
 registerAdminRoutes({ app, wrap, transaction, audit, query });
+registerEmployeeReports({ app, wrap, transaction, audit, query });
 const whatsapp = registerWhatsApp({ app, wrap, transaction, audit, query });
 registerLeave({ app, wrap, transaction, audit, query, whatsapp });
 registerWorkspaceRoutes({ app, wrap, transaction, audit, query });

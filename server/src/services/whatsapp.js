@@ -1,9 +1,11 @@
+import { createGroupMessages } from "./group-messages.js";
 import { collectLeaveRequest } from "./leave.js";
 import { createHash } from "node:crypto";
 import { z } from "zod";
 import { calculate, resolveRules } from "./rules.js";
 import { chateryRequest, ensureChatery } from "../integrations/chatery.js";
 import {
+  dayBounds,
   localMessageTime,
   parseAttendanceMessage,
   senderIdentity,
@@ -59,6 +61,7 @@ export const configSchema = z
     groupId: z.string().max(160),
     groupName: z.string().max(200).default(""),
     timeZone: z.string().max(100).default(""),
+    allowEditedMessages: z.boolean().default(false),
     autoApprove: z.boolean().default(false),
     autoOverwrite: z.boolean().default(false),
     messagesPerSync: z.number().int().min(1).max(2000).default(200),
@@ -88,6 +91,7 @@ export function createWhatsAppService({
   now = Date.now,
 }) {
   let running = false;
+  let resetGeneration = 0;
   let lastAttempt = null;
   const status = { lastSync: null, error: null, syncing: false };
   async function config() {
@@ -126,6 +130,8 @@ export function createWhatsAppService({
     overwrite = false,
     expectedRevision = null,
     manualApproval = false,
+    correction = null,
+    reviewOnly = false,
   ) {
     if (
       !message ||
@@ -147,28 +153,55 @@ export function createWhatsAppService({
       if (
         (expectedRevision !== null &&
           (cfg.revision || 0) !== expectedRevision) ||
-        !cfg.enabled ||
+        (!cfg.enabled && !reviewOnly) ||
         cfg.sessionId !== sessionId ||
         cfg.groupId !== message.chatId ||
-        Number(message.timestamp) < cfg.since ||
+        (!reviewOnly &&
+          !manualApproval &&
+          Number(message.timestamp) < cfg.since) ||
         Number(message.timestamp) > Date.now() / 1000 + 86400
       )
         return;
-      const parsed = parseAttendanceMessage(
-        message.content,
-        Number(message.timestamp),
-        cfg.timeZone,
-      );
-      if (!parsed) return;
       const [events] = await c.execute(
         "SELECT * FROM whatsapp_events WHERE id=?",
         [id],
       );
+      const previous = events[0];
+      if (manualApproval && previous && previous.text !== message.content)
+        throw fail("Message changed. Refresh and review again.", 409);
+      if (correction && correction.expectedText !== message.content)
+        throw fail("Message changed. Refresh and review again.", 409);
+      const changed = Boolean(previous && previous.text !== message.content);
+      const isEdited = Boolean(
+        previous?.isEdited || message.isEdited || changed,
+      );
+      const parsed =
+        correction ||
+        parseAttendanceMessage(
+          message.content,
+          Number(previous?.timestamp || message.timestamp),
+          cfg.timeZone,
+        );
+      if (!parsed && !previous && !isEdited && !reviewOnly) return;
+      if (changed) {
+        await c.execute(
+          "UPDATE whatsapp_events SET previousText=text,text=?,isEdited=1,correction=NULL,state='review',clearedAt=NULL WHERE id=?",
+          [message.content, id],
+        );
+      }
+      if (reviewOnly && previous) {
+        await c.execute(
+          "UPDATE whatsapp_events SET clearedAt=NULL,manualOnly=1 WHERE id=?",
+          [id],
+        );
+        if (!changed) return { state: previous.state, reason: previous.reason };
+      }
       const identity = senderIdentity(message) || "unresolved";
       const recoveringSender =
         events[0]?.senderId === "unresolved" && identity !== "unresolved";
       if (
         events.length &&
+        !changed &&
         ((!retry && !recoveringSender) || events[0].state !== "review")
       )
         return;
@@ -207,20 +240,66 @@ export function createWhatsAppService({
         );
         return { state, reason };
       };
-      if (identity === "unresolved")
+      if (reviewOnly) {
+        await c.execute(
+          "UPDATE whatsapp_events SET manualOnly=1,isEdited=? WHERE id=?",
+          [isEdited ? 1 : 0, id],
+        );
+        return finish(
+          "review",
+          "Selected for review.",
+          previous?.employeeId || null,
+          parsed?.date || null,
+        );
+      }
+      if (previous?.manualOnly && !manualApproval)
+        return finish(
+          "review",
+          "Manual approval required.",
+          previous.employeeId,
+          previous.date,
+        );
+      if (previous?.correction && !manualApproval && !changed)
+        return finish(
+          "review",
+          "Corrected entry: approval required.",
+          previous.employeeId,
+          previous.date,
+        );
+      if (isEdited) {
+        await c.execute("UPDATE whatsapp_events SET isEdited=1 WHERE id=?", [
+          id,
+        ]);
+        if (!manualApproval || !cfg.allowEditedMessages)
+          return finish(
+            "review",
+            cfg.allowEditedMessages
+              ? "Edited message: approval required."
+              : "Edited messages disabled.",
+            previous?.employeeId || null,
+            previous?.date || parsed?.date || null,
+          );
+      }
+      if (!parsed) return finish("review", "Unrecognized attendance message.");
+      if (identity === "unresolved" && !correction)
         return finish(
           "review",
           "WhatsApp did not provide the sender identity. Retry to fetch the sender again.",
         );
       if (parsed.reason) return finish("review", parsed.reason);
-      const [linked] = await c.execute(
-        identity.startsWith("phone:")
-          ? "SELECT DISTINCT e.* FROM employees e LEFT JOIN whatsapp_links l ON l.employeeId=e.id WHERE e.status='Active' AND (e.phone=? OR l.identity=?)"
-          : "SELECT e.* FROM whatsapp_links l JOIN employees e ON e.id=l.employeeId WHERE l.identity=? AND e.status='Active'",
-        identity.startsWith("phone:")
-          ? ["+" + identity.slice(6), identity]
-          : [identity],
-      );
+      const [linked] = correction
+        ? await c.execute(
+            "SELECT * FROM employees WHERE id=? AND status='Active'",
+            [correction.employeeId],
+          )
+        : await c.execute(
+            identity.startsWith("phone:")
+              ? "SELECT DISTINCT e.* FROM employees e LEFT JOIN whatsapp_links l ON l.employeeId=e.id WHERE e.status='Active' AND (e.phone=? OR l.identity=?)"
+              : "SELECT e.* FROM whatsapp_links l JOIN employees e ON e.id=l.employeeId WHERE l.identity=? AND e.status='Active'",
+            identity.startsWith("phone:")
+              ? ["+" + identity.slice(6), identity]
+              : [identity],
+          );
       if (!linked.length)
         return finish(
           "review",
@@ -228,19 +307,19 @@ export function createWhatsAppService({
         );
       const employee = linked[0];
       if (cfg.autoApprove === false && !retry)
-        return finish(
-          "review",
-          "Awaiting approval. Enable auto-approve to apply matched messages automatically.",
-          employee.id,
-          parsed.date,
-        );
+        return finish("review", "Awaiting approval.", employee.id, parsed.date);
+      if (correction)
+        await c.execute("UPDATE whatsapp_events SET correction=? WHERE id=?", [
+          JSON.stringify(correction),
+          id,
+        ]);
       let date = parsed.date,
         overnight = false;
       let [rows] = await c.execute(
         "SELECT * FROM attendance WHERE employeeId=? AND date=? FOR UPDATE",
         [employee.id, date],
       );
-      if (!rows.length && parsed.action === "out") {
+      if (!correction && !rows.length && parsed.action === "out") {
         const previous = new Date(date + "T12:00:00Z");
         previous.setUTCDate(previous.getUTCDate() - 1);
         const prevDate = previous.toISOString().slice(0, 10);
@@ -329,8 +408,8 @@ export function createWhatsAppService({
         outTime: parsed.action === "out" ? parsed.time : old?.outTime || null,
         overnight,
         notes: automaticAbsence
-          ? "Imported from WhatsApp; automatic absence replaced."
-          : old?.notes || "Imported from WhatsApp",
+          ? "Auto from WA; absence replaced."
+          : old?.notes || "Auto from WA",
       };
       const [settings] = await c.execute(
         "SELECT rules FROM settings WHERE id=1",
@@ -388,9 +467,16 @@ export function createWhatsAppService({
       );
     });
   }
-  async function retryEvent(id, overwrite = false) {
+  async function retryEvent(
+    id,
+    overwrite = false,
+    correction = null,
+    expectedText = null,
+  ) {
     const [row] = await query("SELECT * FROM whatsapp_events WHERE id=?", [id]);
     if (!row) throw fail("Message not found.", 404);
+    if (expectedText !== null && row.text !== expectedText)
+      throw fail("Message changed. Refresh and review again.", 409);
     const cfg = await config();
     if (
       !cfg.enabled ||
@@ -403,7 +489,7 @@ export function createWhatsAppService({
       };
     if (row.state !== "review") return { state: row.state, reason: row.reason };
     let message;
-    if (row.senderId === "unresolved") {
+    if (row.senderId === "unresolved" && !correction) {
       // Retry must refresh the original message, not manufacture a LID from
       // the literal string 'unresolved'. Bound network work and detect loops.
       if (request === chateryRequest) await ensureChatery();
@@ -457,28 +543,53 @@ export function createWhatsAppService({
         overwrite,
         cfg.revision || 0,
         true,
+        correction,
       )) || {
         state: row.state,
         reason: "Message is not ready to approve. Refresh and retry.",
       }
     );
   }
+  async function clearStuckSync() {
+    await transaction(async (c) => {
+      await c.execute("SELECT id FROM settings WHERE id=1 FOR UPDATE");
+      const [rows] = await c.execute(
+        "SELECT config FROM whatsapp_config WHERE id=1",
+      );
+      const cfg = parse(rows[0].config);
+      cfg.revision = Math.max(now(), (cfg.revision || 0) + 1);
+      cfg.syncProgress = null;
+      // Keep queued messages and checkpoints. Wait for an explicit Sync, then
+      // scan cached messages from the newest page without requesting phone history.
+      cfg.resumeFromCache = true;
+      await c.execute("UPDATE whatsapp_config SET config=? WHERE id=1", [
+        JSON.stringify(cfg),
+      ]);
+    });
+    resetGeneration += 1;
+    status.error = null;
+    lastAttempt = null;
+  }
   async function poll({ automatic = false } = {}) {
     if (running) return;
     running = true;
+    const generation = resetGeneration;
     status.syncing = true;
     try {
       const cfg = await config();
       if (!cfg.enabled && !cfg.leaveEnabled) return;
+      if (automatic && cfg.resumeFromCache) return;
       if (
         automatic &&
         lastAttempt !== null &&
         now() - lastAttempt <
-          (status.error
-            ? 60000
-            : cfg.syncProgress
-              ? 15000
-              : cfg.syncIntervalMinutes * 60000)
+          (cfg.syncProgress?.waitingForHistory
+            ? 15000
+            : status.error
+              ? 60000
+              : cfg.syncProgress
+                ? 15000
+                : cfg.syncIntervalMinutes * 60000)
       )
         return;
       lastAttempt = now();
@@ -494,6 +605,7 @@ export function createWhatsAppService({
         scanned: 0,
         startedAt: Math.floor(now() / 1000),
         fullScan,
+        recoverHistory: cfg.resumeFromCache ? false : !automatic,
         cutoff: fullScan
           ? cfg.since || 0
           : Math.max(cfg.since || 0, (cfg.checkedThrough || 0) - 86400),
@@ -505,6 +617,19 @@ export function createWhatsAppService({
       const yesterday = new Date(today + "T12:00:00Z");
       yesterday.setUTCDate(yesterday.getUTCDate() - 1);
       const oldestAutomaticDate = yesterday.toISOString().slice(0, 10);
+      // Reconnection can deliver yesterday's messages after today's checkpoint
+      // advances. Always scan the whole local yesterday, not only 24 hours back.
+      // Also widen saved fetch progress from older versions; keep date selections
+      // and the group's original import boundary intact.
+      if (!progress.dates && progress.phase === "fetch") {
+        progress.cutoff = Math.max(
+          cfg.since || 0,
+          Math.min(
+            progress.cutoff,
+            dayBounds(oldestAutomaticDate, cfg.timeZone)[0],
+          ),
+        );
+      }
       // Revisit the earlier IN even when the OUT was imported on a previous
       // scan. Keep the wider cutoff in persisted progress across page limits.
       if (cfg.enabled && !progress.dates && progress.phase === "fetch") {
@@ -549,6 +674,16 @@ export function createWhatsAppService({
           return true;
         });
       }
+      if (cfg.resumeFromCache) {
+        progress.recoverHistory = false;
+        if (
+          !(await update(async (_c, latest) => {
+            latest.resumeFromCache = false;
+            latest.syncProgress = progress;
+          }))
+        )
+          return;
+      }
       let fetched = 0;
       const cursors = new Set([progress.cursor]);
       while (progress.phase === "fetch" && fetched < cfg.messagesPerSync) {
@@ -558,9 +693,33 @@ export function createWhatsAppService({
           chatId: cfg.groupId,
           limit,
           cursor: progress.cursor,
+          recoverHistory: progress.recoverHistory ?? !automatic,
         });
         if (!Array.isArray(data.messages) || data.messages.length > limit)
           throw new Error("Chatery returned an invalid message list.");
+        if (data.historyPending) {
+          // Keep the exact cursor and manual recovery intent so the background
+          // worker resumes this request after the phone responds.
+          progress.waitingForHistory = true;
+          progress.recoverHistory = true;
+          if (
+            !(await update(async (_c, latest) => {
+              latest.syncProgress = progress;
+            }))
+          )
+            return;
+          throw new Error(
+            "WhatsApp history recovery is pending. It will retry automatically; the scan has not advanced.",
+          );
+        }
+        progress.waitingForHistory = false;
+        const scannedCount = data.scannedCount ?? data.messages.length;
+        if (
+          !Number.isSafeInteger(scannedCount) ||
+          scannedCount < data.messages.length ||
+          scannedCount > limit
+        )
+          throw new Error("Chatery returned an invalid message count.");
         // Decide the boundary before discarding older messages on this page.
         // Looking behind recent OUTs also covers an overnight IN; normal
         // employee matching, deduplication and approval still happen in ingest.
@@ -601,14 +760,14 @@ export function createWhatsAppService({
           data.messages.some((m) => Number(m.timestamp) < progress.cutoff);
         if (
           !complete &&
-          (!data.messages.length || !data.cursor || cursors.has(data.cursor))
+          (!scannedCount || !data.cursor || cursors.has(data.cursor))
         )
           throw new Error(
             "Chatery message pagination stalled. Saved sync progress is preserved; try syncing again.",
           );
         const next = {
           ...progress,
-          scanned: progress.scanned + data.messages.length,
+          scanned: progress.scanned + scannedCount,
           cursor: complete ? null : data.cursor,
           phase: complete ? "apply" : "fetch",
         };
@@ -634,7 +793,14 @@ export function createWhatsAppService({
             )
               continue;
             await collectLeaveRequest(c, m, cfg);
+            const id = hash([cfg.sessionId, m.chatId, m.id]);
+            const [known] = await c.execute(
+              "SELECT text FROM whatsapp_events WHERE id=?",
+              [id],
+            );
             if (
+              !known.length &&
+              !m.isEdited &&
               !parseAttendanceMessage(
                 m.content,
                 Number(m.timestamp),
@@ -642,14 +808,14 @@ export function createWhatsAppService({
               )
             )
               continue;
-            const id = hash([cfg.sessionId, m.chatId, m.id]);
             await c.execute(
-              "INSERT IGNORE INTO whatsapp_sync_queue (id,timestamp,message) SELECT ?,?,? WHERE NOT EXISTS (SELECT 1 FROM whatsapp_events WHERE id=? AND (state<>'review' OR (?=0 AND senderId<>'unresolved')))",
+              "INSERT IGNORE INTO whatsapp_sync_queue (id,timestamp,message) SELECT ?,?,? WHERE NOT EXISTS (SELECT 1 FROM whatsapp_events WHERE id=? AND BINARY text=BINARY ? AND (state<>'review' OR (?=0 AND senderId<>'unresolved')))",
               [
                 id,
                 Number(m.timestamp),
                 JSON.stringify(m),
                 id,
+                m.content,
                 cfg.autoApprove ? 1 : 0,
               ],
             );
@@ -658,7 +824,7 @@ export function createWhatsAppService({
         });
         if (!saved) return;
         Object.assign(progress, next);
-        fetched += data.messages.length;
+        fetched += scannedCount;
         cursors.add(data.cursor);
       }
       if (progress.phase === "apply") {
@@ -748,11 +914,90 @@ export function createWhatsAppService({
       status.lastSync = new Date(now()).toISOString();
       status.error = null;
     } catch (error) {
-      status.error = error.message;
+      if (generation === resetGeneration) status.error = error.message;
     } finally {
       running = false;
       status.syncing = false;
     }
   }
-  return { config, ingest, poll, retryEvent, status };
+  const groupInbox = createGroupMessages({
+    config,
+    query,
+    transaction,
+    request,
+    ensure: async () => {
+      if (request === chateryRequest) await ensureChatery();
+    },
+  });
+  async function groupMessages(input = {}) {
+    return groupInbox.list(input);
+  }
+  async function scanGroupMessages(input = {}) {
+    await groupInbox.scan(input);
+    return groupInbox.list(input);
+  }
+  async function clearGroupMessages(input) {
+    return groupInbox.clear(input);
+  }
+  async function selectGroupMessage({ messageId, sessionId, groupId }) {
+    const cfg = await config();
+    if (cfg.sessionId !== sessionId || cfg.groupId !== groupId)
+      throw fail("Group changed. Refresh and try again.", 409);
+    // Prefer the current connector message; retained scan history supports review
+    // when the connector has since evicted the message.
+    let message = await groupInbox.saved(messageId, cfg);
+    if (request === chateryRequest) await ensureChatery();
+    try {
+      const latest = await request("/chats/group-messages", {
+        sessionId,
+        chatId: groupId,
+        messageId,
+      });
+      message = latest.message || message;
+    } catch (error) {
+      if (!message) throw error;
+    }
+    if (
+      !message ||
+      message.id !== messageId ||
+      message.chatId !== groupId ||
+      !message.isGroup
+    )
+      throw fail("Message unavailable. Refresh the group messages.", 404);
+    const result = await ingest(
+      {
+        ...message,
+        type: "text",
+        content:
+          typeof message.content === "string"
+            ? message.content
+            : message.caption || "[" + message.type + "]",
+      },
+      sessionId,
+      true,
+      false,
+      cfg.revision || 0,
+      false,
+      null,
+      true,
+    );
+    if (!result)
+      throw fail("Message could not be selected. Refresh and try again.", 409);
+    const [event] = await query("SELECT * FROM whatsapp_events WHERE id=?", [
+      hash([sessionId, groupId, messageId]),
+    ]);
+    return event;
+  }
+  return {
+    config,
+    ingest,
+    poll,
+    retryEvent,
+    clearStuckSync,
+    groupMessages,
+    scanGroupMessages,
+    clearGroupMessages,
+    selectGroupMessage,
+    status,
+  };
 }

@@ -15,6 +15,7 @@ export default function DailyReport({
 }) {
   const clock = useTimeFormatter();
   const [group, setGroup] = useState("All groups");
+  const [sort, setSort] = useState("default");
   const [exporting, setExporting] = useState(false);
   const [exportError, setExportError] = useState("");
   const holiday = holidayForDate(date, holidays, weeklyOffDays);
@@ -32,6 +33,21 @@ export default function DailyReport({
         daily.find((r) => r.employeeId === e.id)?.status ??
         (holiday ? "Holiday" : "Unmarked"),
     }));
+  if (sort !== "default") {
+    const [field, direction] = sort.split("-");
+    const minutes = (row) => {
+      if (!row[field]) return null;
+      const [hours, mins] = row[field].split(":").map(Number);
+      return hours * 60 + mins + (field === "outTime" && row.overnight ? 1440 : 0);
+    };
+    rows.sort((a, b) => {
+      const left = minutes(a);
+      const right = minutes(b);
+      if (left == null) return right == null ? 0 : 1;
+      if (right == null) return -1;
+      return (left - right) * (direction === "asc" ? 1 : -1);
+    });
+  }
   const groups = [...new Set(employees.map((e) => e.department))];
   const fields = [
     "Name",
@@ -101,6 +117,16 @@ export default function DailyReport({
             {groups.map((g) => (
               <option key={g}>{g}</option>
             ))}
+          </select>
+        </label>
+        <label>
+          Sort by
+          <select value={sort} onChange={(e) => setSort(e.target.value)}>
+            <option value="default">Default order</option>
+            <option value="inTime-asc">In time · Earliest first</option>
+            <option value="inTime-desc">In time · Latest first</option>
+            <option value="outTime-asc">Out time · Earliest first</option>
+            <option value="outTime-desc">Out time · Latest first</option>
           </select>
         </label>
       </div>

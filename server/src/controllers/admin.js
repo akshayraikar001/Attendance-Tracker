@@ -1,6 +1,10 @@
 import { z } from "zod";
 import { createHash } from "node:crypto";
-import { holidayDateSchema, resolveRules } from "../services/rules.js";
+import {
+  calculate,
+  holidayDateSchema,
+  resolveRules,
+} from "../services/rules.js";
 import { dateRange, holidayForDate } from "../../../shared/calendar.js";
 const parse = (x) => (typeof x === "string" ? JSON.parse(x) : x);
 const kindSchema = z.enum(["departments", "roles"]);
@@ -20,6 +24,21 @@ const bulkSchema = z
     status: z
       .enum(["Present", "Absent", "Half day", "Attended"])
       .default("Absent"),
+    entryMode: z.enum(["status", "time"]).default("status"),
+    inTime: z.preprocess(
+      (value) => (value === "" || value == null ? null : value),
+      z
+        .string()
+        .regex(/^([01]\d|2[0-3]):[0-5]\d$/)
+        .nullable(),
+    ),
+    outTime: z.preprocess(
+      (value) => (value === "" || value == null ? null : value),
+      z
+        .string()
+        .regex(/^([01]\d|2[0-3]):[0-5]\d$/)
+        .nullable(),
+    ),
     previewToken: z.string().optional(),
   })
   .refine(
@@ -29,7 +48,15 @@ const bulkSchema = z
   .refine(
     (v) => dateRange(v.from, v.to).length * v.employeeIds.length <= 10000,
     "Limit each bulk entry to 10,000 employee-days",
-  );
+  )
+  .superRefine((v, c) => {
+    if (v.entryMode === "time" && !v.inTime && !v.outTime)
+      c.addIssue({
+        code: "custom",
+        path: ["inTime"],
+        message: "Enter an In time, an Out time, or both",
+      });
+  });
 const fail = (message, status = 400) =>
   Object.assign(new Error(message), { status });
 export function registerAdminRoutes({ app, wrap, transaction, audit, query }) {
@@ -217,6 +244,7 @@ export function registerAdminRoutes({ app, wrap, transaction, audit, query }) {
               existing.map((r) => [r.employeeId + ":" + r.date, r]),
             );
             const changes = [];
+            const missingIn = [];
             let skippedHolidays = 0,
               skippedExisting = 0;
             for (const date of dateRange(input.from, input.to))
@@ -232,11 +260,53 @@ export function registerAdminRoutes({ app, wrap, transaction, audit, query }) {
                 const old = byKey.get(employee.id + ":" + date);
                 if (reset && !old) continue;
                 if (!reset && old && !input.overwrite) {
-                  skippedExisting++;
+                  const canFillMissingTime =
+                    input.entryMode === "time" &&
+                    ((input.inTime && !old.inTime) ||
+                      (input.outTime && !old.outTime));
+                  if (!canFillMissingTime) {
+                    skippedExisting++;
+                    continue;
+                  }
+                }
+                if (reset) {
+                  changes.push({ employee, date, old });
                   continue;
                 }
-                changes.push({ employee, date, old });
+                const mergeTime = (key) =>
+                  input.entryMode !== "time"
+                    ? old?.[key] || null
+                    : input.overwrite
+                      ? input[key] || old?.[key] || null
+                      : old?.[key] || input[key] || null;
+                const entry = {
+                  mode: input.entryMode === "time" ? "time" : "manual",
+                  inTime: mergeTime("inTime"),
+                  outTime: mergeTime("outTime"),
+                  overnight: Boolean(old?.overnight),
+                  status: input.status,
+                };
+                if (
+                  input.entryMode === "time" &&
+                  entry.outTime &&
+                  !entry.inTime
+                ) {
+                  missingIn.push(`${employee.name} (${date})`);
+                  continue;
+                }
+                const rules = resolveRules(settings, employee, date);
+                let calc;
+                try {
+                  calc = calculate(entry, rules);
+                } catch (error) {
+                  throw fail(`${employee.name} on ${date}: ${error.message}`);
+                }
+                changes.push({ employee, date, old, entry, rules, calc });
               }
+            if (missingIn.length)
+              throw fail(
+                `Add In time before entering Out time: ${missingIn.slice(0, 10).join(", ")}${missingIn.length > 10 ? ` and ${missingIn.length - 10} more` : ""}.`,
+              );
             const token = createHash("sha256")
               .update(
                 JSON.stringify({
@@ -260,6 +330,8 @@ export function registerAdminRoutes({ app, wrap, transaction, audit, query }) {
                 name: r.employee.name,
                 date: r.date,
                 replaces: r.old?.status || null,
+                inTime: r.entry?.inTime || null,
+                outTime: r.entry?.outTime || null,
               })),
             };
             if (preview) return summary;
@@ -268,7 +340,7 @@ export function registerAdminRoutes({ app, wrap, transaction, audit, query }) {
                 "Attendance or settings changed. Review the preview again before applying.",
                 409,
               );
-            for (const { employee, date, old } of changes) {
+            for (const { employee, date, old, entry, rules, calc } of changes) {
               if (reset) {
                 await c.execute(
                   "DELETE FROM attendance WHERE employeeId=? AND date=?",
@@ -282,13 +354,20 @@ export function registerAdminRoutes({ app, wrap, transaction, audit, query }) {
                 });
                 continue;
               }
-              const rules = resolveRules(settings, employee, date);
               await c.execute(
-                `INSERT INTO attendance (employeeId,date,mode,status,notes,rules) VALUES (?,?,'manual',?,?,?) ON DUPLICATE KEY UPDATE mode='manual',status=VALUES(status),notes=VALUES(notes),rules=VALUES(rules)`,
+                `INSERT INTO attendance (employeeId,date,mode,inTime,outTime,overnight,status,workedMinutes,lateMinutes,earlyMinutes,overtimeMinutes,notes,rules) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?) ON DUPLICATE KEY UPDATE mode=VALUES(mode),inTime=VALUES(inTime),outTime=VALUES(outTime),overnight=VALUES(overnight),status=VALUES(status),workedMinutes=VALUES(workedMinutes),lateMinutes=VALUES(lateMinutes),earlyMinutes=VALUES(earlyMinutes),overtimeMinutes=VALUES(overtimeMinutes),notes=VALUES(notes),rules=VALUES(rules)`,
                 [
                   employee.id,
                   date,
-                  input.status,
+                  entry.mode,
+                  entry.inTime,
+                  entry.outTime,
+                  entry.overnight,
+                  calc.status,
+                  calc.workedMinutes,
+                  calc.lateMinutes,
+                  calc.earlyMinutes,
+                  calc.overtimeMinutes,
                   input.notes,
                   JSON.stringify(rules),
                 ],
@@ -305,7 +384,8 @@ export function registerAdminRoutes({ app, wrap, transaction, audit, query }) {
                     employeeId: employee.id,
                     date,
                     mode: "manual",
-                    status: input.status,
+                    ...entry,
+                    ...calc,
                     notes: input.notes,
                     rules,
                   },

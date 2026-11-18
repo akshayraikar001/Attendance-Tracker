@@ -292,7 +292,6 @@ export default function LocationTracking({ admin = false }) {
         <div className="employee-empty">
           <MapPin size={30} />
           <h3>Select an employee</h3>
-          <p>View their check-in history or enable location check-ins.</p>
         </div>
       )}
       {data && (
@@ -479,7 +478,7 @@ export default function LocationTracking({ admin = false }) {
                   <div className="location-map-placeholder">
                     <MapPin size={32} />
                     <strong>{areaLabel(selected)}</strong>
-                    <p>Open this location in Google Maps.</p>
+
                     {admin && (
                       <small>
                         Add the maps preview key under Map settings above.
