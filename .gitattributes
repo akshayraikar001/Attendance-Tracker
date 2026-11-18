@@ -1,0 +1,2 @@
+# Connector patches retain upstream context/removal whitespace for git apply.
+docs/chatery-*.patch -whitespace

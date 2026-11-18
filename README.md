@@ -1,160 +1,256 @@
 # Dayline — Attendance Tracker
 
-A React + Node.js attendance workspace with a MySQL database. Includes a responsive dashboard, employee directory, attendance register, configurable shift rules, Excel reports, employee summaries, and a transactional audit log.
+Dayline manages employees, attendance, shift timings, leave approvals and Excel reports. You can enter attendance manually or import In/Out messages from a WhatsApp group through **Chatery**.
 
-## Quick start
+Built with React 18, Vite, JavaScript, CSS, Node.js, Express and MySQL/MariaDB. No email provider is needed for account signup.
 
-Requires Node.js 20+ and MySQL 8+ (or MariaDB 10.6+).
+## 1. Install the requirements
+
+- **Node.js 20+** and npm (`node --version`, `npm --version`).
+- **Git** to clone the project.
+- **Docker Desktop / Docker Compose**, or an existing MySQL 8+ / MariaDB 10.6+ server.
+- For WhatsApp: a separate **Chatery** service and a phone that belongs to the attendance group.
+
+Run the Dayline commands below from the project root. Windows users can use PowerShell; the optional local MariaDB helper requires Bash/Linux.
+
+## 2. Download and configure Dayline
 
 ```bash
-npm install
-cp .env.example .env
+git clone <your-dayline-repository-url> Dayline
+cd Dayline
+# If your changes are on a feature branch, check out that branch first.
+npm ci
+```
+
+Copy `.env.example` to `.env` using your editor or file manager. On macOS/Linux use `cp .env.example .env`; in PowerShell use `Copy-Item .env.example .env`.
+
+For the included Docker database, keep these values:
+
+```dotenv
+PORT=3001
+DB_HOST=127.0.0.1
+DB_PORT=3306
+DB_USER=attendance
+DB_PASSWORD=attendance_dev
+DB_NAME=attendance_tracker
+COOKIE_SECURE=false
+DB_LOCAL_MANAGED=false
+```
+
+These credentials are for the local development database, **not** the Dayline sign-in form. `.env` is ignored by Git; configure it on each machine. Use your own credentials for a shared server.
+
+## 3. Start the database
+
+### Option A: Docker (simplest)
+
+```bash
 docker compose up -d
-# Wait until MySQL is healthy, then:
+docker compose ps
+```
+
+Wait until MySQL reports **healthy**. It stores data in the `attendance_data` volume. `docker compose stop` keeps the data; `docker compose down -v` deletes that volume.
+
+### Option B: an existing MySQL/MariaDB server
+
+Run `server/database.sql` through your database administrator or SQL client. It creates the database and application user. Set the matching host, port, database, username and password in `.env`. Skip Docker.
+
+For the optional Linux-only development database on port 3307, see [development and tests](docs/DEVELOPMENT.md).
+
+Then create or upgrade Dayline's tables:
+
+```bash
 npm run db:setup
+```
+
+This command preserves existing accounts, employees and attendance. Run it when installing or upgrading. Optional fictional sample data is available with `npm run db:setup -- --seed`; use this only on an empty demo database.
+
+## 4. Start Dayline and create your account
+
+```bash
 npm run dev
 ```
 
-Open http://localhost:5173. The API runs on port 3001. If you already have MySQL, create a database and user using `server/database.sql`, update `.env`, and skip Docker. The setup command creates tables without deleting existing data.
+Open **http://localhost:5173**. The backend runs on port **3001**. Keep the terminal running.
 
-Optional sample employees and attendance:
+1. Choose **Create account**.
+2. Enter your name, email, password and password confirmation. Passwords must have at least 10 characters.
+3. The first account becomes **Admin**. All later accounts are created by an administrator under **User management**. Select **Employee** and link an employee record for a read-only personal panel.
+4. Add employees, departments and their phone numbers. Configure timings under **Settings**.
+
+There is no default application password or Gmail verification step. Existing installations should sign in with their saved account. Use **Account → Sign out** to log out.
+
+Employee access, Keycloak configuration, and the admin **Time away** log are documented in [Employee access](docs/EMPLOYEE_ACCESS.md).
+
+For local Dayline with the hosted Keycloak test realm, see [Keycloak local setup](docs/KEYCLOAK_LOCAL_SETUP.md), including the importable client file and `npm run keycloak:check` command.
+
+## 5. Connect WhatsApp through Chatery
+
+Manual attendance works without Chatery. WhatsApp imports require **both Dayline and Chatery to be running**.
+
+### Install Chatery separately
+
+In a second terminal, outside the Dayline folder:
 
 ```bash
-npm run db:setup -- --seed
+git clone https://github.com/farinchan/chatery_whatsapp.git Chatery
+cd Chatery
+# Version checked against this integration:
+git checkout a5f31a55db0872c1f7e053d09794749f7ad865fb
+npm ci
 ```
 
-Sample data is fictional. The regular setup starts empty.
+Copy Chatery's `.env.example` to `.env`, then configure:
 
-## This workspace
+```dotenv
+PORT=3010
+API_KEY=replace-with-your-own-long-random-key
+```
 
-An isolated MariaDB development instance is configured on port 3307 in `.env`, for this workspace’s employees and attendance. The standard Docker configuration uses MySQL 8 on port 3306. To restart the isolated instance if needed:
+Start it and leave it running:
 
 ```bash
-npm run db:local
+npm start
+```
+
+In **Dayline's** `.env`, set:
+
+```dotenv
+CHATERY_URL=http://127.0.0.1:3010
+CHATERY_API_KEY=the-same-key-you-set-in-chatery
+CHATERY_MANAGED_PATH=
+```
+
+Replace the example keys with the same actual value in both files. Restart Dayline after changing `.env`. Chatery must support paginated message history (`cursor` and `hasMore`); older installations without that API cannot reliably catch up on history.
+
+Optional: set `CHATERY_MANAGED_PATH` to the absolute path of your local Chatery folder to let Dayline start it when needed. Otherwise start Chatery yourself as above. If Chatery runs on another computer, use a URL reachable **from the Dayline server**; `127.0.0.1` always means that same computer.
+
+### Link the phone and choose the group
+
+1. Sign in to Dayline as an Admin and open **WhatsApp** in the sidebar.
+2. Click **Link WhatsApp / refresh QR**.
+3. On your phone, open **WhatsApp → Linked devices → Link a device** and scan the QR code.
+4. Wait for the green **Connected** indicator, then click **Load my groups**.
+5. Select your attendance group and timezone, for example `Insight - Attendance` and `Asia/Kolkata`.
+6. Match each employee's phone in **Employees**, including country code: `+919999999999`. If WhatsApp supplies an unresolved sender identity, review/link it in the WhatsApp module.
+7. Enable importing, choose whether attendance should be auto-approved, and click **Save WhatsApp settings**.
+8. Send a test message from a linked employee's phone, then click **Sync latest messages** or wait for auto-sync.
+
+Examples: `In time 10:50`, `In time 2:05`, `Out time 6:55`, `IN`, `OUT`. Without AM/PM, the parser uses its office-hours rules and message timestamp. Plain `IN`/`OUT` use the message time in the selected timezone. See [WhatsApp behavior and examples](docs/WHATSAPP.md).
+
+Only the selected group's messages are imported. Attendance imports do not send replies. Administrators can explicitly send private monthly employee reports from Reports → Send Emp Report. Leave requests use the same linked device and group but require **Allow Leave Approval** and always need manual approval.
+
+The phone pairing is stored in Chatery's `sessions/` directory, not in the Dayline repository. Closing the terminals normally keeps pairing. Retain that directory; logging out/unlinking or deleting it requires scanning again. WhatsApp can also revoke a linked device.
+
+## Everyday use
+
+- **Attendance:** add/edit In time and Out time, clear saved times, use a direct status, bulk-mark Present, Absent, Half day or Attended or preview/reset a selected date range.
+- **Calendar:** see daily counts and absentee names; use the three dots for a preview.
+- **Settings:** workspace, department and employee timings, recurring weekday shifts, time display and attendance timezone. One-hour break deduction is off by default.
+- **Automatic Out time:** when enabled, after the configured cutoff (default 8 PM), an eligible entry with In time but no Out time receives the configured time (default 7:05 PM) and a note. Existing Out times and overnight shifts are preserved. The backend must run; eligible overdue entries are checked on startup when catch-up is enabled.
+- **Reports:** daily, monthly, single-day attendance details, employee summaries and Excel export.
+- **Leave Approval:** review leave/half-day requests and manually approve or reject. Existing attendance requires explicit overwrite.
+
+## Use on another laptop or shared server
+
+**Yes, this project can run elsewhere**, but cloning code does not copy your database, `.env` or paired WhatsApp device.
+
+For a fresh installation, repeat steps 1–5 and create a new account. To keep your existing workspace:
+
+1. Back up the existing MySQL/MariaDB database using your database tool or `mysqldump`.
+2. Install Dayline and a compatible Chatery version on the new machine.
+3. Restore the database, configure the new `.env`, then run `npm run db:setup`.
+4. Start both services, sign in with your existing Dayline account, link the phone again if needed, and verify the selected group and timezone.
+5. Stop the old Dayline instance before running automatic imports against the same workspace on the new one.
+
+To access one shared workspace from multiple laptops, keep a single Dayline backend, database and Chatery service on an always-on server. The other laptops only need a browser.
+
+For a production build:
+
+```bash
+npm ci
 npm run db:setup
-npm run dev
-```
-
-Set `DB_LOCAL_MANAGED=true` in `.env` when using this local instance (host `127.0.0.1`, port `3307`, database `attendance_tracker`). The API starts it before accepting requests, applies the schema without deleting data, and checks every five seconds to restart it if it stops. This option requires the local MariaDB tools and should remain false for Docker or external databases.
-
-The isolated data lives in the gitignored `.local/` folder. This optional helper requires MariaDB installed on the machine.
-
-## Features
-
-- Add and edit employees, departments, job titles, optional emails, and active status.
-- Settings includes a saved AM/PM (12-hour) toggle, enabled by default, for screens, time entry, and printed reports. Turn it off for 24-hour display. Excel export formats and stored clock values stay unchanged.
-- Dark mode by default, with a persistent light/dark toggle in the header.
-- Enter attendance with clock-in/out times, or directly mark Present, Absent, Half day, or Attended.
-- One entry per employee/date; saving again updates it and records the previous values. The attendance form stays open after saving and closes only with Cancel. Switching employee/date loads that employee’s existing entry, or starts an empty one using their applicable shift.
-- Configure full/half-day minimums, overtime threshold, shift times, and late grace for the workspace, individual departments/groups, or specific employees.
-- Timing priority: employee override → department/group override → workspace defaults. Use Settings to customize or restore inherited timings.
-- Save clock-in alone, then add clock-out later on the same entry. Open shifts are labeled In progress; both time fields have Clear buttons.
-- Explicit next-day clock-out for overnight shifts.
-- Search employees and filter by department, date, and attendance status.
-- Daily overview, seven-day trend, attendance breakdown, and unmarked count.
-- Simple daily report (Reports → Daily report), with Name, In time, Out time, Total hours (including breaks), and color-coded Status in larger, readable text. Includes group filtering, matching Excel export, and print/PDF through the browser.
-- Date-range detail and per-employee reports: worked time, lateness, early departures, overtime, entry method, and notes.
-- Native `.xlsx` export with numeric Excel clock-time and duration cells, Unicode text, blank missing values, and literal text (never formulas).
-- Latest 500 audit events with expandable before/after values. All audit events remain stored in MySQL.
-- Saving timing settings automatically recalculates all time-based attendance using employee/group/workspace precedence. Manual statuses stay unchanged. Each recalculation records previous and updated values in the audit log.
-
-## Monthly reports, bulk absence, and workspace settings
-
-- **Reports → Monthly report** shows each employee’s daily status with hours underneath, plus Present, Absent, and Half day totals. Sundays without records are neutral Holiday cells. Click a day to enter or edit attendance, or export the month to Excel.
-- **Attendance → Bulk absent** lets you select employees and a date range (up to 366 days and 10,000 employee-days). Preview before applying. Holidays and existing entries are skipped by default; explicitly enable replacement to overwrite existing entries. Every change is audited.
-- **Settings → Departments / Roles** lets you add and rename categories. Renaming updates assigned employees; department timing overrides follow the rename. Only unused categories can be removed. Manager is a job role, not a login/access permission.
-- **Settings → Holidays** manages weekly days off and named dates. Attendance can still be recorded on any holiday, and existing attendance takes precedence.
-- Date and date-range controls include previous/next arrows for quick navigation.
-
-## Holidays and calendar
-
-Open **Calendar** in the sidebar. Use the month arrows or Today, then select a date for a short report of statuses and recorded hours. Click **Edit** or **Record** beside an employee to open attendance for that date. Saving refreshes the report; Cancel closes the editor.
-
-In the selected day panel, enter a holiday name and click **Add holiday**. You can rename it with **Save holiday** or use **Remove holiday** to make the date a working day again. Holidays apply to the whole workspace, persist in MySQL, and record changes in the activity log. Existing attendance stays intact, including work performed on a holiday.
-
-For an existing installation, run `npm run db:setup` once before restarting the API to add the holiday and department/role catalog tables without deleting existing data.
-
-## Calculation policy
-
-Until clock-out is entered, a shift is In progress: lateness is measured but worked time, early departure, overtime, and final status remain pending.
-
-Worked minutes = clock-out minus clock-in, including breaks. No break time is deducted, including for legacy workspace/group/employee settings. Full-day and half-day boundaries are inclusive; more than one minute below the half-day minimum is Attended; one minute or less is Absent. Early arrival counts toward worked time. Overtime is only worked time above the configured overtime threshold. Arriving early or staying past shift end does not independently earn overtime. The Activity column uses these hour-based results. Early arrival alone does not grant a full day if work is below the full-day minimum. Once the grace period is exceeded, lateness counts from shift start. Early departure counts until scheduled shift end. Punctuality flags do not independently change attendance classification.
-
-Direct status entries have **no measured hours**, lateness, early departure, or overtime. Unmarked dates are not automatically absences. Attendance rate is `(present + 0.5 × half days) / active employees`. Times are entered as the team's local wall-clock time, without timezone conversion; an overnight entry belongs to its start date. Historical dashboard headcount uses the current active directory. Groups use the employee’s department. Individual rules override group rules, and group rules override workspace defaults. Saving timing settings recalculates existing time-based entries immediately; original inputs and manual statuses are preserved. Workspace holidays label employees without entries as Holiday in the calendar, register, and daily report/export. Recorded attendance always takes precedence; holiday changes never rewrite measured hours or statuses. Sundays are weekly holidays by default; Settings → Holidays lets you change weekly days off and add dated holidays. Existing attendance rates remain based on recorded attendance/current active headcount; there is no holiday pay, payroll, or leave calculation.
-
-## Production build
-
-```bash
 npm run build
 npm start
 ```
 
-The Node server serves the compiled React app and API at http://localhost:3001.
+The backend serves the built app on port **3001**. Use your server's hostname/IP instead of `localhost` from other computers. Configure networking and an HTTPS reverse proxy for remote access; set `COOKIE_SECURE=true` when using HTTPS. Keep MySQL and Chatery accessible to the backend and use a process manager/service to restart the Node processes. This repository does not provision hosting automatically.
 
-Dayline uses database-backed accounts with email and password sign-in. Database credentials belong in `.env`, which is gitignored.
+## Troubleshooting
 
-## Internal signup and login
+| Problem | Check |
+| --- | --- |
+| Database unavailable | Start MySQL; check `.env` host/port/credentials; run `npm run db:setup`; restart Dayline. |
+| Endpoint not found after an update | Restart the backend from the updated checkout and rebuild if using `npm start`. |
+| Chatery offline or connection refused | Start Chatery; verify `CHATERY_URL` from the backend machine. |
+| Chatery unauthorized | Match Chatery's `API_KEY` with Dayline's `CHATERY_API_KEY`, then restart both services. |
+| No groups or QR | Confirm Chatery is running and the phone is linked; refresh QR/load groups in Dayline. |
+| Message missing | Check group, timezone, import switch, original enable date, sender phone and pending sync progress. Chatery must actually have received the message history. |
+| Message visible but no attendance | Check auto-approval; otherwise approve manually. Review unknown senders, ambiguous times and conflicts. |
+| Old changes still on screen | Refresh the view. In development keep API port 3001, or also update the proxy in `client/vite.config.js`. |
+| Fresh clone has no previous users/data | Restore the old database; Git only contains the application code. |
 
-Select **Create account**, enter your name, email, password (at least 10 characters), and confirm password. Creating an account signs you in immediately. Use your email and password for future sign-ins. No email service, verification link, setup code, or external account is required. Passwords are stored as salted scrypt hashes.
+## Project organization and tests
 
-The first registered account becomes the administrator; later registrations become active Staff accounts. Staff can work with attendance, employees, and reports; administrators manage accounts and workspace settings. This signup policy is intended for the trusted internal workspace. Existing username accounts still work using **Have an older username account?**.
+```text
+client/src/       React app: pages, layouts, common components, hooks, services, styles
+server/src/       Express app: controllers, services, integrations, configuration, database
+shared/           Date, time, phone, report and note helpers shared across the app
+server/test/      Unit tests
+tests/           UI and database/API integration tests (see below)
+scripts/          Optional local development database helper
+docs/             Architecture, WhatsApp behavior and development instructions
+```
 
-Run `npm run db:setup` once after upgrading and restart the API. Existing users, employees, attendance, and settings are preserved. Old email-verification tables, if present, are unused. No SMTP or owner-email configuration is read. Set `COOKIE_SECURE=true` when serving over HTTPS; leave it false for local HTTP development.
-
-## Verification
+See [architecture and file responsibilities](docs/ARCHITECTURE.md) and [test commands and requirements](docs/DEVELOPMENT.md). Quick checks:
 
 ```bash
 npm test
 npm run test:ui
-npm run test:export
-npm run test:admin
-npm run test:holidays
-npm run test:auth
-npm run test:auth:ui
 npm run build
 ```
 
-Run `npm run test:admin` and `npm run test:holidays` after `npm run db:local` to verify the holiday API against a temporary isolated database; it removes its test database afterward.
+Database integration tests have separate local prerequisites described in the development guide. Never commit `.env`, database backups or Chatery session credentials.
 
-Calculation tests cover full/half days, included breaks, late grace, early exits, overtime, overnight shifts, invalid times/dates, and manual entries.
+Location check-ins for field employees: see [Location tracking setup](docs/LOCATION_TRACKING.md).
 
-## Project structure
+## Attendance updates
 
-```text
-client/
-  src/main.jsx          React entry point
-  src/App.jsx           Screens and attendance forms
-  src/components/       Daily report and timing settings
-  src/styles.css        Responsive design system
-  vite.config.js        Development proxy
-server/
-  src/index.js          API routes, transactions, static hosting
-  src/db.js             MySQL connection pool
-  src/rules.js          Validation and attendance calculation
-  src/setup.js          Idempotent schema and optional seed
-  test/rules.test.js    Calculation tests
-  database.sql          Initial database/user provisioning
-.env.example            Configuration template
-docker-compose.yml     MySQL development service
-```
+- **Leave dates:** “today”, “tomorrow”/“tommorw”, “today and tomorrow” and consecutive lists like “15,16” suggest both From/To dates. Relative dates use the original message timestamp in the selected timezone. Old pending requests with missing dates are rechecked when listed; approved/rejected requests are unchanged. Separate dates like “15,18” still need review rather than marking the days between them.
+- **Bulk attendance:** select employees and dates, then choose either a status (Present, Absent, Half day or Attended) or **In / out time**. Time mode applies an In time, an Out time, or both to every selected employee-day, calculates worked hours and attendance metrics when both sides are available, and supports open In-only entries. Out time requires a saved or supplied In time. With overwrite off, only missing time fields are filled; status edits preserve saved times and overnight flags. Preview is required before applying; existing records and holidays are skipped by default. Reset attendance remains available separately.
+- **Monthly reports and review controls:** Monthly reports offer the existing time export and a status-only Excel export (P/A/H for Present/Absent/Half day, Holiday for holidays, AT/IP/dash for other states), with counts and no time columns. Settings > Report settings independently controls the daily average in reports/Excel and print; half-day recorded hours are optional (off by default). Bulk attendance and reset display colored attendance badges for the From date. Already reviewed dismisses a pending leave without touching attendance, retains its audit record and is available in the Already reviewed filter. Sidebar navigation through Location tracking is unchanged; lower duplicate actions are removed, and the Account dropdown displays username/role plus left-aligned action icons.
+- **Automatic absence:** Settings → Timings → Whole workspace → Automatically mark absent after day end. Off by default. Once enabled, completed local days are checked every minute and on startup. Active employees with no attendance are marked Absent with a short note; holidays, existing entries and dates before activation are skipped. Overnight shifts wait until their end time. Long offline catch-up runs in batches of up to 31 days. Re-enabling starts from that day, without filling the disabled period.
+- **Late WhatsApp imports:** an untouched automatic absence can be replaced by a valid In message according to the existing auto-approval/manual approval settings. A manually changed absence still requires explicit overwrite.
 
-## API
+After updating, run `npm run db:setup` and restart the backend. The new `auto_absences` table stores processing/ownership markers so clearing an automatic absence does not recreate it on the next check. No existing attendance is deleted by setup.
 
-- `GET /api/health`
-- `GET /api/employees`, `POST /api/employees`, `PUT /api/employees/:id`
-- `GET /api/attendance?from=YYYY-MM-DD&to=YYYY-MM-DD`, `POST /api/attendance`
-- `GET /api/settings`, `PUT /api/settings`
-- `GET /api/catalog`, `POST /api/catalog/:kind`, `PUT /api/catalog/:kind/:id`, `DELETE /api/catalog/:kind/:id` (`departments` or `roles`)
-- `POST /api/attendance/bulk-absence/preview`, `POST /api/attendance/bulk-absence`
-- `GET /api/audit`
-- `GET /api/holidays`, `PUT /api/holidays/:date` (name and optional active flag)
+### Message history and automatic Out time
 
-Employee updates and attendance/settings changes commit atomically with their audit records. Parameterized queries protect input values, and server-side validation enforces attendance inputs and rule consistency.
+Run `npm run db:setup` after updating to add the message-history column. Clear messages now hides them in cleared history without deleting duplicate protection or attendance. Use **Show cleared history** in WhatsApp to view them.
 
-The included `node scripts/smoke-test.mjs` exercises a running API with actual writes. It creates a test employee, then deactivates it and restores the original settings. Run only against a development database.
+Automatic WhatsApp approval/overwrite only changes today and yesterday in the configured group timezone. For example, on Thursday it can change Wednesday and Thursday, but Tuesday needs manual approval. Existing sync frequency and message limits still apply.
 
-## phpMyAdmin in this workspace
+In **Settings → Timings**, configure automatic Out time: enable/disable, **Check after** (default 8 PM), **Save Out time as** (default 7:05 PM), and whether to catch up missed checks after reopening (default on). The saved time must not be later than the cutoff. Only records with an earlier In time and missing Out time qualify; overnight shifts are excluded. Checks require the server to be running and use the attendance timezone.
 
-The existing phpMyAdmin installation has an additional server named **Attendance Tracker (port 3307)**. Select it and log in using the database user/password in `.env`. The original port-3306 connection is unchanged. Configuration: `/etc/phpmyadmin/conf.d/attendance-tracker.php`.
+### Daily WhatsApp controls and preserved attendance times
 
-Employees, attendance, and activity history were cleared at your request. A private SQL backup from before the reset is stored in `.local/backups/`. Attendance rules were preserved. Do not run the optional `--seed` command for daily use.
+Changing an employee's direct status keeps saved In/Out times visible in attendance and reports. Existing measured hours are retained; no hours are invented when times are missing. Bulk status changes and approved leave follow the same rule. Use the explicit Clear buttons in the attendance editor to remove times, or Reset attendance to remove an entry.
+
+WhatsApp messages are grouped by full date in the selected group timezone. Today is expanded by default; older dates are collapsed. Use **Sync today**, choose a **Sync date**, **Sync all history**, or select day checkboxes for bulk sync/clear. Clearing archives messages and preserves attendance and duplicate protection. Open a day and choose **Load more messages** to view additional pages. The top navigation shows WhatsApp connection status, refreshed every 15 seconds. The WhatsApp panel shows Connection/Import and any remaining batch progress. Day-specific sync respects existing approval settings and the today/yesterday auto-approval window; older messages require manual approval. Large jobs continue in batches, and a new selection waits until the current job finishes.
+
+### Send monthly employee reports
+
+Open **Reports → Send Emp Report** as an administrator. Choose a month, **PDF** or **Excel**, and **With time & details** or **Simple attendance only**. Select employees, optionally download a preview, then click **Send selected reports** and confirm the recipients. Only selected employees receive a private WhatsApp document containing their own month. The message reads “Hi Akshay, Kindly Review your October Attendence”, using the employee’s first name and selected month name. Their saved employee phone number must include the country code; the shared WhatsApp device must be connected. Attendance importing may remain paused.
+
+File names use the first name, surname initial and month, for example **Akshay R Oct Attendence.pdf**. The report itself includes the full month/year. Both formats colour attendance statuses. Detailed Excel contains date, status, In/Out times and hours, without overtime or comments. Detailed PDF uses a day-report-style table with date, In/Out times, hours and coloured status, repeating headings on additional pages. Notes and overtime are omitted. Simple reports contain dates/statuses and status counts only. Saved direct statuses/times are respected.
+
+The **Attendance report sent** column is persisted per employee/month/format/detail option. Sent means the connector confirmed a WhatsApp message ID, not delivered/read confirmation. Refresh status to retrieve the latest result. **Allow resending** is enabled by default, so previously attempted reports can be selected again with another recipient confirmation; active sends remain protected. The upper report tabs scroll horizontally. Network timeouts or interrupted sends show **Not confirmed**: check WhatsApp before resending, as the message may already have reached the employee. Closing the screen stops the remaining batch; an already submitted send can still finish.
+
+Run `npm run db:setup` after updating and restart the backend to install `employee_report_sends`. Reports are generated on demand and passed inline to Chatery; no public download URLs or report files are retained. The existing connector must support `data:` document URLs (supported by the installed Baileys connector). Files above the connector's default JSON limit are rejected before sending; choose Excel or simple attendance in that case. A bundled DejaVu font and its license support PDF text without depending on machine fonts.
+
+Automatic notes now display **!! Auto Out time Added** and **Auto from WA**. Existing saved notes are shortened on read/export without rewriting attendance or WhatsApp ownership records. Employee report and summary omit Late/Early columns; employee exports also omit Method. Attendance calculations remain unchanged.
+
+Checks: `npm run test:employee-reports` (isolated database/mock sender), `npm run test:employee-reports:ui`, and `npm test`. These tests do not send actual employee messages.
+
+Edited WhatsApp messages require manual approval; enable **Allow edited messages** in WhatsApp settings. Use **Edit entry** to correct pending attendance. See [connector setup and corrections](docs/WHATSAPP.md#edited-messages-and-corrections).
+
+- Report settings: “Include half-day overtime in daily working average” optionally adds max(0, recorded half-day minutes − configured half-day minimum) to Present-day minutes, divided by measured Present days. Off by default; mutually exclusive in Settings with including all half-day hours. With no measured Present days the average is blank. Applies to monthly reports, print and time Excel exports; attendance status and payroll overtime are unchanged.

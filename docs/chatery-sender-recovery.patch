@@ -1,0 +1,33 @@
+diff --git a/src/services/whatsapp/MessageFormatter.js b/src/services/whatsapp/MessageFormatter.js
+index d6c876b..427cf95 100644
+--- a/src/services/whatsapp/MessageFormatter.js
++++ b/src/services/whatsapp/MessageFormatter.js
+@@ -12,7 +12,17 @@ class MessageFormatter {
+         if (!msg || !msg.message) return null;
+ 
+         let resolvedChatId = msg.key.remoteJid;
+-        let resolvedSender = msg.key.participant || msg.key.remoteJid;
++        // History messages can carry the author at the top level instead of
++        // key.participant. A group address is never an employee identity.
++        const isGroup = msg.key.remoteJid?.endsWith('@g.us');
++        let resolvedSender = msg.key.participant || msg.participant ||
++            msg.key.participantAlt || msg.participantAlt ||
++            (isGroup ? null : msg.key.remoteJid);
++        const alternateSender = msg.key.participantAlt || msg.participantAlt;
++        if (resolvedSender?.endsWith('@lid') &&
++            /^\d+(?::\d+)?@(s\.whatsapp\.net|c\.us)$/.test(alternateSender || '')) {
++            resolvedSender = alternateSender;
++        }
+ 
+         if (store) {
+             // Resolve direct chat JID if it is an LID
+@@ -118,7 +128,8 @@ class MessageFormatter {
+             chatId: resolvedChatId,
+             fromMe: msg.key.fromMe || false,
+             sender: resolvedSender,
+-            senderPhone: resolvedSender?.split('@')[0],
++            senderPhone: /^\d+(?::\d+)?@(s\.whatsapp\.net|c\.us)$/.test(resolvedSender || '')
++                ? resolvedSender.split('@')[0].split(':')[0] : null,
+             senderName: msg.pushName || null,
+             timestamp: typeof msg.messageTimestamp === 'object' 
+                 ? msg.messageTimestamp.low 

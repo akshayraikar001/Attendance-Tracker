@@ -1,0 +1,370 @@
+--- a/src/services/whatsapp/BaileysStore.js
++++ b/src/services/whatsapp/BaileysStore.js
+@@ -109,7 +109,7 @@
+     ev.on('contacts.set', ({ contacts }) => {
+       for (const contact of contacts) {
+         // Register identity mapping when both PN JID and LID are known
+-        if (contact.id && contact.lid && !contact.id.endsWith('@lid')) {
++        if (contact?.id && contact.lid && !contact.id.endsWith('@lid')) {
+           this.registerIdentity(contact.lid, contact.id);
+         }
+ 
+@@ -133,7 +133,7 @@
+     ev.on('contacts.upsert', (contacts) => {
+       for (const contact of contacts) {
+         // Register identity mapping when both PN JID and LID are known
+-        if (contact.id && contact.lid && !contact.id.endsWith('@lid')) {
++        if (contact?.id && contact.lid && !contact.id.endsWith('@lid')) {
+           this.registerIdentity(contact.lid, contact.id);
+         }
+ 
+@@ -187,7 +187,7 @@
+     });
+ 
+     // Handle message updates - OPTIMIZED
+-    ev.on('messages.set', ({ messages, isLatest }) => {
++    const storeHistoryMessages = ({ messages = [] }) => {
+       for (const msg of messages) {
+         // Skip null/invalid messages
+         if (!msg || !msg.key || !msg.key.remoteJid || !msg.key.id) continue;
+@@ -230,6 +230,23 @@
+         this.messages.get(resolvedId).set(msg.key.id, msg);
+         this._updateSingleChatOverview(resolvedId, msg);
+       }
++    };
++    ev.on('messages.set', storeHistoryMessages);
++    // Baileys v7 delivers both reconnect and on-demand history on this event.
++    // Store it directly: replaying live upserts would send duplicate webhooks.
++    ev.on('messaging-history.set', ({ messages = [], contacts = [], chats = [] }) => {
++      for (const contact of contacts) {
++        if (!contact.id) continue;
++        if (contact.lid && !contact.id.endsWith('@lid')) this.registerIdentity(contact.lid, contact.id);
++        if (contact.id.endsWith('@lid') && contact.phoneNumber) this.registerIdentity(contact.id, contact.phoneNumber);
++        this.contacts.set(contact.id, { ...this.contacts.get(contact.id), ...contact });
++      }
++      for (const chat of chats) {
++        if (chat.id) this.chats.set(chat.id, { ...this.chats.get(chat.id), ...chat });
++      }
++      storeHistoryMessages({ messages });
++      this._invalidateContactsCache();
++      this._invalidateOverviewCache();
+     });
+ 
+     ev.on('messages.upsert', ({ messages, type }) => {
+@@ -668,9 +685,8 @@
+    * Safe JSON serialization (handles circular references and binary data)
+    */
+   _safeSerialize(data) {
+-    const seen = new WeakSet();
+-    
+-    return JSON.stringify(data, (key, value) => {
++    const ancestors = [];
++    return JSON.stringify(data, function (key, value) {
+       // Skip binary data and buffers
+       if (value instanceof Uint8Array || value instanceof ArrayBuffer) {
+         return undefined;
+@@ -686,10 +702,11 @@
+       
+       // Handle circular references
+       if (typeof value === 'object' && value !== null) {
+-        if (seen.has(value)) {
+-          return undefined;
+-        }
+-        seen.add(value);
++        // Shared messages and identity mappings occur in several maps. Only
++        // an ancestor cycle is circular; repeated sibling references are valid.
++        while (ancestors.length && ancestors.at(-1) !== this) ancestors.pop();
++        if (ancestors.includes(value)) return undefined;
++        ancestors.push(value);
+       }
+       
+       return value;
+@@ -786,7 +803,7 @@
+       }
+       if (data.messages) {
+         this.messages = new Map(
+-          data.messages.map(([chatId, msgs]) => [chatId, new Map(msgs)])
++          data.messages.map(([chatId, msgs]) => [chatId, new Map(msgs.filter(([, msg]) => msg?.key))])
+         );
+       }
+       if (data.groupMetadata) {
+@@ -810,7 +827,7 @@
+       // Reconstruct lidMap from contacts (collect first to avoid modifying map during iteration)
+       const identityPairs = [];
+       for (const [id, contact] of this.contacts.entries()) {
+-        if (contact.id && contact.lid && !contact.id.endsWith('@lid')) {
++        if (contact?.id && contact.lid && !contact.id.endsWith('@lid')) {
+           identityPairs.push({ lid: contact.lid, jid: contact.id });
+         }
+       }
+@@ -1109,7 +1126,7 @@
+     // Collect all known LID→JID mappings from lidMap
+     const migrations = new Map();
+     for (const [key, mapping] of this.lidMap.entries()) {
+-      if (key.endsWith('@lid') && mapping.jid && !mapping.jid.endsWith('@lid')) {
++      if (key.endsWith('@lid') && mapping?.jid && !mapping.jid.endsWith('@lid')) {
+         migrations.set(key, mapping.jid);
+       }
+     }
+--- a/src/services/whatsapp/WhatsAppSession.js
++++ b/src/services/whatsapp/WhatsAppSession.js
+@@ -6,6 +6,7 @@
+ 
+ const BaileysStore = require('./BaileysStore');
+ const MessageFormatter = require('./MessageFormatter');
++const { historyPage } = require('./HistoryPage');
+ const wsManager = require('../websocket/WebSocketManager');
+ 
+ /**
+@@ -1625,7 +1626,7 @@
+         }
+     }
+ 
+-    async getChatMessages(chatId, limit = 50, cursor = null) {
++    async getChatMessages(chatId, limit = 50, cursor = null, recoverHistory = false) {
+         try {
+             if (!this.socket || this.connectionStatus !== 'connected') {
+                 return { success: false, message: 'Session not connected' };
+@@ -1638,61 +1639,7 @@
+                 await this.resolveLidFromServer(jid);
+             }
+ 
+-            const isGroup = this.isGroupId(jid);
+-            
+-            let messages = [];
+-            
+-            // Try to fetch from server first (if fetchMessageHistory is available)
+-            if (typeof this.socket.fetchMessageHistory === 'function') {
+-                try {
+-                    const cursorMsg = cursor ? { 
+-                        before: { 
+-                            id: cursor, 
+-                            fromMe: false,
+-                            remoteJid: jid 
+-                        } 
+-                    } : undefined;
+-
+-                    const result = await this.socket.fetchMessageHistory(limit, cursorMsg, jid);
+-                    if (Array.isArray(result)) {
+-                        messages = result;
+-                    }
+-                } catch (fetchError) {
+-                    // Silent fail, will use store as fallback
+-                }
+-            }
+-
+-            // Fallback: Try to get messages from store
+-            if (messages.length === 0 && this.store) {
+-                try {
+-                    const storeMessages = this.store.getMessages(jid, { limit, before: cursor });
+-                    if (storeMessages && storeMessages.length > 0) {
+-                        messages = storeMessages;
+-                    }
+-                } catch (storeError) {
+-                    console.log(`[${this.sessionId}] Store messages error:`, storeError.message);
+-                }
+-            }
+-
+-            const formattedMessages = messages
+-                .filter(msg => msg && msg.key) // Filter invalid messages
+-                .map(msg => MessageFormatter.formatMessage(msg, this.store))
+-                .filter(msg => msg !== null);
+-
+-            return {
+-                success: true,
+-                data: {
+-                    chatId: jid,
+-                    isGroup: isGroup,
+-                    total: formattedMessages.length,
+-                    limit: limit,
+-                    cursor: formattedMessages.length > 0 
+-                        ? formattedMessages[formattedMessages.length - 1].id 
+-                        : null,
+-                    hasMore: formattedMessages.length === limit,
+-                    messages: formattedMessages
+-                }
+-            };
++            return { success: true, data: await historyPage(this, jid, limit, cursor, undefined, recoverHistory) };
+         } catch (error) {
+             return { success: false, message: error.message };
+         }
+--- a/src/routes/whatsapp.js
++++ b/src/routes/whatsapp.js
+@@ -1047,7 +1047,7 @@
+  */
+ router.post('/chats/messages', checkSession, async (req, res) => {
+     try {
+-        const { chatId, limit = 50, cursor = null } = req.body;
++        const { chatId, limit = 50, cursor = null, recoverHistory = false } = req.body;
+         
+         if (!chatId) {
+             return res.status(400).json({
+@@ -1056,7 +1056,7 @@
+             });
+         }
+         
+-        const result = await req.session.getChatMessages(chatId, limit, cursor);
++        const result = await req.session.getChatMessages(chatId, limit, cursor, recoverHistory === true);
+         res.json(result);
+     } catch (error) {
+         res.status(500).json({
+--- /dev/null
++++ b/src/services/whatsapp/HistoryPage.js
+@@ -0,0 +1,74 @@
++const MessageFormatter = require('./MessageFormatter');
++const requests = new WeakMap();
++
++async function recoverHistory(socket, jid, anchor, count, waitMs = 6000) {
++  if (!anchor || typeof socket.fetchMessageHistory !== 'function') return false;
++  let cache = requests.get(socket);
++  if (!cache) requests.set(socket, cache = new Map());
++  const key = `${jid}:${anchor.key.id}:${count}`;
++  const now = Date.now();
++  for (const [id, item] of cache) if (item.expires <= now) { item.cancel(); cache.delete(id); }
++  let item = cache.get(key);
++  if (!item) {
++    item = { done: false, expires: now + 120000 };
++    let resolve;
++    item.promise = new Promise(r => { resolve = r; });
++    let timer;
++    const finish = (complete) => {
++      socket.ev.off('messaging-history.set', onHistory);
++      clearTimeout(timer);
++      item.done = complete;
++      item.expires = Date.now() + (complete ? 60000 : 0);
++      resolve();
++    };
++    const onHistory = data => {
++      // Match the request where supported; otherwise match only this chat.
++      const matches = data.peerDataRequestSessionId && item.requestId
++        ? data.peerDataRequestSessionId === item.requestId
++        : data.messages?.some(m => m.key?.remoteJid === jid) || data.chats?.some(c => c.id === jid);
++      if (matches) finish(true);
++    };
++    item.cancel = () => finish(false);
++    cache.set(key, item);
++    socket.ev.on('messaging-history.set', onHistory);
++    timer = setTimeout(item.cancel, 120000);
++    timer.unref?.();
++    try {
++      // Returns a request ID. Messages arrive asynchronously through the store.
++      item.requestId = await socket.fetchMessageHistory(count, anchor.key, Number(anchor.messageTimestamp) * 1000);
++    } catch (error) {
++      item.cancel();
++      cache.delete(key);
++      throw error;
++    }
++  }
++  if (!item.done) {
++    let timer;
++    await Promise.race([item.promise, new Promise(resolve => { timer = setTimeout(resolve, waitMs); })]);
++    clearTimeout(timer);
++  }
++  return !item.done;
++}
++
++async function historyPage(session, jid, limit, cursor, waitMs, recover = true) {
++  limit = Math.min(50, Math.max(1, Number(limit) || 50));
++  const store = session.store;
++  if (!store) throw new Error('WhatsApp message store is not ready. Try syncing again.');
++  const anchor = cursor ? store.getMessage(jid, cursor) : store.getMessages(jid, { limit: 1 })[0];
++  if (cursor && !anchor) throw new Error('WhatsApp history cursor is unavailable. Restart the history scan.');
++  const historyPending = recover ? await recoverHistory(session.socket, jid, anchor, limit, waitMs) : false;
++  // Pagination follows raw messages, including protocol messages the formatter omits.
++  const raw = store.getMessages(jid, { limit, before: cursor });
++  return {
++    chatId: jid,
++    isGroup: session.isGroupId(jid),
++    total: raw.length,
++    scannedCount: raw.length,
++    limit,
++    cursor: raw.at(-1)?.key.id || null,
++    hasMore: raw.length === limit,
++    historyPending,
++    messages: raw.map(m => MessageFormatter.formatMessage(m, store)).filter(Boolean),
++  };
++}
++module.exports = { historyPage };
+--- /dev/null
++++ b/test/history-recovery.test.js
+@@ -0,0 +1,80 @@
++const test = require('node:test');
++const assert = require('node:assert/strict');
++const { EventEmitter } = require('node:events');
++const { historyPage } = require('../src/services/whatsapp/HistoryPage');
++const Store = require('../src/services/whatsapp/BaileysStore');
++const jid = '123@g.us';
++const message = (id, timestamp, content = 'IN 09:00') => ({ key: { id, remoteJid: jid, fromMe: false, participant: '919000000001@s.whatsapp.net' }, messageTimestamp: timestamp, message: { conversation: content } });
++const fixture = () => {
++  const ev = new EventEmitter(); const store = new Store(); store.bind(ev);
++  return { store, socket: { ev }, isGroupId: id => id.endsWith('@g.us') };
++};
++test('asynchronous phone history recovers missed OUT after latest IN; request uses actual key and milliseconds', async () => {
++  const session = fixture(); const latest = message('today-in', 200000);
++  session.socket.ev.emit('messages.upsert', { messages: [latest] });
++  session.socket.fetchMessageHistory = async (count, key, timestamp) => {
++    assert.equal(count, 50); assert.deepEqual(key, latest.key); assert.equal(timestamp, 200000000);
++    setTimeout(() => session.socket.ev.emit('messaging-history.set', { messages: [message('yesterday-out', 150000, 'OUT 18:00')], contacts: [], chats: [{id: jid}], peerDataRequestSessionId: 'request' }), 5);
++    return 'request';
++  };
++  const result = await historyPage(session, jid, 100, null, 100);
++  assert.equal(result.historyPending, false);
++  assert.deepEqual(result.messages.map(m => m.id), ['today-in', 'yesterday-out']);
++  assert.equal(session.socket.ev.listenerCount('messaging-history.set'), 1);
++});
++test('pending phone history remains pending and late delivery is consumed without duplicate request', async () => {
++  const session = fixture(); let requests = 0;
++  session.socket.ev.emit('messages.upsert', { messages: [message('latest', 200000)] });
++  session.socket.fetchMessageHistory = async () => { requests++; return 'pending'; };
++  assert.equal((await historyPage(session, jid, 100, null, 1)).historyPending, true);
++  session.socket.ev.emit('messaging-history.set', { messages: [message('missed', 150000)], peerDataRequestSessionId: 'pending' });
++  const result = await historyPage(session, jid, 100, null, 1);
++  assert.equal(result.historyPending, false); assert.equal(result.messages.length, 2); assert.equal(requests, 1);
++});
++test('filtered protocol messages do not truncate pagination', async () => {
++  const session = fixture();
++  session.socket.ev.emit('messaging-history.set', { messages: [message('old', 1), {...message('protocol', 2), message: null}, message('new', 3)] });
++  const first = await historyPage(session, jid, 2, null);
++  assert.equal(first.messages.length, 1); assert.equal(first.scannedCount, 2); assert.equal(first.hasMore, true); assert.equal(first.cursor, 'protocol');
++  const second = await historyPage(session, jid, 2, first.cursor);
++  assert.deepEqual(second.messages.map(m => m.id), ['old']);
++});
++test('reconnect history updates stored content without emitting live messages', () => {
++  const session = fixture(); let live = 0; session.socket.ev.on('messages.upsert', () => live++);
++  session.socket.ev.emit('messaging-history.set', { messages: [message('recovered', 1)], contacts: [{id:'919000000001@s.whatsapp.net',name:'Employee'}], chats:[{id:jid,name:'Attendance'}] });
++  assert.equal(session.store.getMessages(jid).length, 1); assert.equal(live, 0);
++});
++test('automatic cached reads do not wait for a phone history request', async () => {
++  const session = fixture();
++  session.socket.ev.emit('messages.upsert', { messages: [message('live', 200000)] });
++  session.socket.fetchMessageHistory = async () => { throw new Error('must not request phone'); };
++  const result = await historyPage(session, jid, 100, null, 1, false);
++  assert.equal(result.historyPending, false); assert.equal(result.messages[0].id, 'live');
++});
++test('failed phone requests report the error and clean up listeners', async () => {
++  const session = fixture();
++  session.socket.ev.emit('messages.upsert', { messages: [message('live', 200000)] });
++  session.socket.fetchMessageHistory = async () => { throw new Error('phone unavailable'); };
++  await assert.rejects(historyPage(session, jid, 100, null, 1), /phone unavailable/);
++  assert.equal(session.socket.ev.listenerCount('messaging-history.set'), 1);
++});
++
++test('history cache roundtrip preserves shared messages and identity aliases', () => {
++  const fs = require('node:fs'); const os = require('node:os'); const path = require('node:path');
++  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'chatery-history-'));
++  try {
++    const store = new Store(); const msg = message('shared-out', 150000, 'OUT 18:00');
++    store.messages.set(jid, new Map([[msg.key.id, msg]]));
++    store.chats.set(jid, {id: jid, messages: [{message: msg}]});
++    store.registerIdentity('12345@lid', '919000000001@s.whatsapp.net');
++    assert.equal(store.writeToFile(path.join(dir, 'store.json')), true);
++    const restored = new Store();
++    assert.equal(restored.readFromFile(path.join(dir, 'store.json')), true);
++    assert.equal(restored.getMessage(jid, 'shared-out').message.conversation, 'OUT 18:00');
++    assert.equal(restored.resolveIdentity('12345@lid').jid, '919000000001@s.whatsapp.net');
++    const saved = JSON.parse(fs.readFileSync(path.join(dir, 'store.json'), 'utf8'));
++    assert.ok(saved.lidMap.every(([, value]) => value !== null));
++    const cycle = {}; cycle.self = cycle;
++    assert.equal(store._safeSerialize(cycle), '{}');
++  } finally { fs.rmSync(dir, {recursive:true,force:true}); }
++});

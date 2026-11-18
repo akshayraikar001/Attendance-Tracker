@@ -1,0 +1,156 @@
+--- a/src/services/whatsapp/BaileysStore.js
++++ b/src/services/whatsapp/BaileysStore.js
+@@ -10,6 +10,7 @@
+     this.chats = new Map();
+     this.contacts = new Map();
+     this.messages = new Map();
++    this.pendingEdits = new Map();
+     this.groupMetadata = new Map();
+     
+     // LID identity mapping registry (key: JID/LID/PN -> { lid, pn, jid })
+@@ -35,6 +36,44 @@
+     this.lastOverviewUpdate = 0;
+     this.lastContactsUpdate = 0;
+     this.cacheTimeout = 30000; // 30 seconds cache validity
++  }
++
++  applyStoredEdit(msg) {
++    const protocol = msg.message?.protocolMessage;
++    if (!protocol?.editedMessage || !protocol.key?.id) return;
++    const chatId = msg.key.remoteJid;
++    const messages = this.messages.get(chatId);
++    const original = messages?.get(protocol.key.id);
++    const editTime = protocol.timestampMs
++      ? Math.floor(Number(protocol.timestampMs) / 1000) : Number(msg.messageTimestamp);
++    const update = { message: { editedMessage: { message: protocol.editedMessage } },
++      messageTimestamp: editTime };
++    if (original) {
++      if (Number(original.editedTimestamp || 0) > editTime) return;
++      messages.set(protocol.key.id, { ...original, message: update.message, editedTimestamp: editTime });
++    } else {
++      this.pendingEdits.set(chatId + ':' + protocol.key.id, update);
++      if (this.pendingEdits.size > 1000)
++        this.pendingEdits.delete(this.pendingEdits.keys().next().value);
++    }
++  }
++
++  mergeMessage(existing, incoming) {
++    const pendingKey = incoming.key.remoteJid + ':' + incoming.key.id;
++    const pending = this.pendingEdits.get(pendingKey);
++    if (pending) {
++      this.pendingEdits.delete(pendingKey);
++      incoming = { ...incoming, message: pending.message,
++        editedTimestamp: pending.messageTimestamp };
++    }
++    if (existing?.message?.editedMessage &&
++        (!incoming.message?.editedMessage ||
++         Number(existing.editedTimestamp || 0) > Number(incoming.editedTimestamp || 0))) {
++      return { ...incoming, ...existing,
++        key: { ...incoming.key, ...existing.key } };
++    }
++    return { ...existing, ...incoming,
++      messageTimestamp: existing?.messageTimestamp || incoming.messageTimestamp };
+   }
+ 
+   /**
+@@ -227,7 +266,9 @@
+         if (!this.messages.has(resolvedId)) {
+           this.messages.set(resolvedId, new Map());
+         }
+-        this.messages.get(resolvedId).set(msg.key.id, msg);
++        this.messages.get(resolvedId).set(msg.key.id,
++          this.mergeMessage(this.messages.get(resolvedId).get(msg.key.id), msg));
++        this.applyStoredEdit(msg);
+         this._updateSingleChatOverview(resolvedId, msg);
+       }
+     };
+@@ -289,7 +330,9 @@
+         if (!this.messages.has(resolvedId)) {
+           this.messages.set(resolvedId, new Map());
+         }
+-        this.messages.get(resolvedId).set(msg.key.id, msg);
++        this.messages.get(resolvedId).set(msg.key.id,
++          this.mergeMessage(this.messages.get(resolvedId).get(msg.key.id), msg));
++        this.applyStoredEdit(msg);
+         this._updateSingleChatOverview(resolvedId, msg);
+       }
+     });
+@@ -309,6 +352,11 @@
+         }
+         
+         const chatMessages = this.messages.get(resolvedId);
++        if (update.message?.editedMessage && !chatMessages?.has(key.id)) {
++          this.pendingEdits.set(resolvedId + ':' + key.id, update);
++          if (this.pendingEdits.size > 1000)
++            this.pendingEdits.delete(this.pendingEdits.keys().next().value);
++        }
+         if (chatMessages) {
+           const existing = chatMessages.get(key.id);
+           if (existing) {
+@@ -812,6 +860,9 @@
+           data.messages.map(([chatId, msgs]) => [chatId, new Map(msgs.filter(([, msg]) => msg?.key))])
+         );
+       }
++      // Older stores may retain the protocol edit while losing its applied wrapper.
++      for (const messages of this.messages.values())
++        for (const message of messages.values()) this.applyStoredEdit(message);
+       if (data.groupMetadata) {
+         this.groupMetadata = new Map(data.groupMetadata);
+       }
+--- a/src/routes/whatsapp.js
++++ b/src/routes/whatsapp.js
+@@ -1045,6 +1045,54 @@
+  * Body: { sessionId, chatId, limit?, cursor? }
+  * chatId: phone number (628xxx) or group id (xxx@g.us)
+  */
++router.post('/chats/group-messages', async (req, res) => {
++    try {
++        const session = whatsappManager.getSession(req.body?.sessionId);
++        if (!session) return res.status(404).json({ success: false, message: 'Session not found.' });
++        const { chatId, date, timeZone = 'UTC', messageId, recoverHistory } = req.body;
++        const offset = Number(req.body.offset || 0);
++        if (typeof chatId !== 'string' || !chatId.endsWith('@g.us') ||
++            !Number.isSafeInteger(offset) || offset < 0 || offset > 1000000)
++            return res.status(400).json({ success: false, message: 'Invalid group or offset.' });
++        const store = session.store;
++        if (!store) throw new Error('Message store unavailable.');
++        let historyPending = false;
++        if (recoverHistory === true) {
++            const cached = [...(store.messages.get(chatId)?.values() || [])]
++                .filter(m => m?.key?.id && m.messageTimestamp)
++                .sort((a, b) => Number(a.messageTimestamp) - Number(b.messageTimestamp));
++            const result = await session.getChatMessages(chatId, 50, cached[0]?.key.id || null, true);
++            if (!result.success) throw new Error(result.message || 'History unavailable.');
++            historyPending = Boolean(result.data.historyPending);
++        }
++        const Formatter = require('../services/whatsapp/MessageFormatter');
++        if (messageId) {
++            const message = Formatter.formatMessage(store.getMessage(chatId, messageId), store);
++            return res.json({ success: true, data: { message } });
++        }
++        const fmt = new Intl.DateTimeFormat('en-CA', { timeZone, year: 'numeric', month: '2-digit', day: '2-digit' });
++        const dayOf = timestamp => {
++            const parts = Object.fromEntries(fmt.formatToParts(new Date(Number(timestamp) * 1000)).map(p => [p.type, p.value]));
++            return parts.year + '-' + parts.month + '-' + parts.day;
++        };
++        const days = new Map(), rows = [];
++        for (const raw of (store.messages.get(chatId)?.values() || [])) {
++            const m = Formatter.formatMessage(raw, store);
++            if (!m || !m.timestamp || m.type === 'protocol') continue;
++            const day = dayOf(m.timestamp);
++            days.set(day, (days.get(day) || 0) + 1);
++            if (!date || day === date) rows.push(m);
++        }
++        rows.sort((a, b) => Number(b.timestamp) - Number(a.timestamp) || a.id.localeCompare(b.id));
++        res.json({ success: true, data: {
++            days: [...days].sort(([a], [b]) => b.localeCompare(a)).map(([date, count]) => ({ date, count })),
++            messages: rows.slice(offset, offset + 100), hasMore: rows.length > offset + 100, historyPending
++        } });
++    } catch (error) {
++        res.status(400).json({ success: false, message: error.message });
++    }
++});
++
+ router.post('/chats/messages', checkSession, async (req, res) => {
+     try {
+         const { chatId, limit = 50, cursor = null, recoverHistory = false } = req.body;
